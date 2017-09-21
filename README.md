@@ -62,3 +62,4 @@ For an introduction to TensorFlow eager execution, see the Jupyter notebooks:
 
 - [Basic Usage](examples/notebooks/1_basics.ipynb)
 - [Gradients](examples/notebooks/2_gradients.ipynb)
+- [Importing Data](examples/notebooks/3_datasets.ipynb)
