@@ -12,7 +12,11 @@ import time
 from tensorflow.contrib.eager.python import tfe
 tfe.enable_eager_execution()
 
+
 USE_MKL = True     # MKL instead of TF inv boosts step-time 10x in classic mode
+USE_GPU = False
+dtype = np.float32
+
 
 if USE_MKL:
   assert np.__config__.get_info("lapack_mkl_info"), "No MKL detected :("
@@ -173,23 +177,10 @@ def summarize_time(time_list=None):
     print("Times: <empty>")
 
 
-dtype = np.float32
-TRAIN_IMAGES = 'train-images-idx3-ubyte.gz'
-source_url = 'https://storage.googleapis.com/cvdf-datasets/mnist/'
-local_file = base.maybe_download(TRAIN_IMAGES, '/tmp',
-                                 source_url + TRAIN_IMAGES)
-train_images = extract_images(open(local_file, 'rb'))
-train_images = train_images.reshape(60000, 28**2).T.astype(np.float64)/255
-dsize = 10000
-fs = [dsize, 28*28, 196, 28*28]  # layer sizes
-lambda_=3e-3
-def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
-n = len(fs) - 2
-X = train_images[:,:dsize].astype(dtype)
-
 @profile
 def loss_and_grad(Wf):
   """Returns cost, gradient for current parameter vector."""
+  global fs, X
   
   W = unflatten(Wf, fs[1:])   # perftodo: this creates transposes
   W.insert(0, X)
@@ -237,30 +228,51 @@ def loss_and_grad(Wf):
   return loss, grad, kfac_grad
 
 def main():
+  global fs, X, n, f, dsize, lambda_
+  
   np.random.seed(0)
   tf.set_random_seed(0)
+  if USE_GPU:
+    device='/gpu:0'
+  else:
+    device='/cpu:0'
 
-  Wf = tf.constant(W_uniform(fs[2],fs[3]))
-  lr = tf.constant(0.2)
+  with tf.device(device):
+    TRAIN_IMAGES = 'train-images-idx3-ubyte.gz'
+    source_url = 'https://storage.googleapis.com/cvdf-datasets/mnist/'
+    local_file = base.maybe_download(TRAIN_IMAGES, '/tmp',
+                                     source_url + TRAIN_IMAGES)
+    train_images = extract_images(open(local_file, 'rb'))
+    train_images = train_images.reshape(60000, 28**2).T.astype(np.float64)/255
+    dsize = 10000
+    fs = [dsize, 28*28, 196, 28*28]  # layer sizes
+    lambda_=3e-3
+    def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
+    n = len(fs) - 2
+    X = train_images[:,:dsize].astype(dtype)
 
-  # # train using gradient descent
-  # for i in range(40):
-  #   import gc; gc.collect()
-  #   cost, grad, pre_grad = loss_and_grad(Wf)
-  #   print(cost)
-  #   Wf-=lr*grad
-  #   record_time()
-    
-  # train using KFAC
-  Wf = tf.constant(W_uniform(fs[2],fs[3]))
-  lr = tf.constant(0.2)
-  for i in range(10):
-    cost, grad, kfac_grad = loss_and_grad(Wf)
-    print(cost)
-    Wf-=lr*kfac_grad
-    if i >= 4:
-      assert cost < 17.6
-    record_time()
+
+    Wf = tf.constant(W_uniform(fs[2],fs[3]))
+    lr = tf.constant(0.2)
+
+    # # train using gradient descent
+    # for i in range(40):
+    #   import gc; gc.collect()
+    #   cost, grad, pre_grad = loss_and_grad(Wf)
+    #   print(cost)
+    #   Wf-=lr*grad
+    #   record_time()
+
+    # train using KFAC
+    Wf = tf.constant(W_uniform(fs[2],fs[3]))
+    lr = tf.constant(0.2)
+    for i in range(10):
+      cost, grad, kfac_grad = loss_and_grad(Wf)
+      print(cost)
+      Wf-=lr*kfac_grad
+      if i >= 4:
+        assert cost < 17.6
+      record_time()
 
   summarize_time()
 
