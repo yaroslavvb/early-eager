@@ -1,19 +1,15 @@
-# Mac iteration time: 1606 ms
-# Linux 1080 TI iteration time: 132 ms
+import util
+import util as u
+from util import t  # transpose
+u.check_mkl()
 
-# conventions. "_op things are ops"
-# "x0" means numpy
-# _live means it's used to update a variable value
-# experiment prefixes
-prefix = "small_final" # for checkin
+import numpy as np
+import scipy
+import tensorflow as tf
+import time
 
 
-# for line profiling
-try:
-    profile  # throws an exception when profile isn't defined
-except NameError:
-    profile = lambda x: x   # if it's not defined simply ignore the decorator.
-
+# fix for https://github.com/tensorflow/tensorflow/issues/13351
 from tensorflow.python.ops import variables
 def passthrough(obj, value): return value
 try:
@@ -21,55 +17,13 @@ try:
 except: # older versions of TF don't have this
   pass
 
-
-import util
-import util as u
-
-drop_l2 = True               # drop L2 term
-drop_sparsity = True         # drop KL term
-use_gpu = False
-do_line_search = False       # line-search and dump values at each iter
-
-import sys
-whitening_mode = 4                 # 0 for gradient, 4 for full whitening
-whiten_every_n_steps = 1           # how often to whiten
-report_frequency = 1               # how often to print loss
-
-num_steps = 20000 if whitening_mode==0 else 20
-util.USE_MKL_SVD=True                   # Tensorflow vs MKL SVD
-
-purely_linear = False  # convert sigmoids into linear nonlinearities
-use_tikhonov = True    # use Tikhonov reg instead of Moore-Penrose pseudo-inv
-Lambda = 1e-3          # magic lambda value from Jimmy Ba for Tikhonov
-
-# adaptive line search
-adaptive_step = False     # adjust step length based on predicted decrease
-adaptive_step_frequency = 1 # how often to adjust
-adaptive_step_burn_in = 0 # let optimization go for a bit before adjusting
-local_quadratics = False  # use quadratic approximation to predict loss drop
-
-import networkx as nx
-import load_MNIST
-import numpy as np
-import scipy.io           # for loadmat
-from scipy import linalg  # for svd
-import math
-import time
-
-import os, sys
-if use_gpu:
-  os.environ['CUDA_VISIBLE_DEVICES']='0'
-else:
-  os.environ['CUDA_VISIBLE_DEVICES']=''
-
-import tensorflow as tf
-from util import t  # transpose
+# for line profiling
+try:
+  profile  # throws an exception when profile isn't defined
+except NameError:
+  profile = lambda x: x   # if it's not defined simply ignore the decorator.
 
 
-def W_uniform(s1, s2): # uniform weight init from Ng UFLDL
-  r = np.sqrt(6) / np.sqrt(s1 + s2 + 1)
-  result = np.random.random(2*s2*s1)*2*r-r
-  return result
 
 @profile
 def main():
@@ -77,21 +31,20 @@ def main():
   tf.set_random_seed(0)
   
   dtype = np.float32
-  # 64-bit doesn't help much, search for 64-bit in
-  # https://www.wolframcloud.com/objects/5f297f41-30f7-4b1b-972c-cac8d1f8d8e4
-  u.default_dtype = dtype
-  machine_epsilon = np.finfo(dtype).eps # 1e-7 or 1e-16
-  train_images = load_MNIST.load_MNIST_images('data/train-images-idx3-ubyte')
+
+  train_images = u.get_mnist_images()
+  
   dsize = 10000
-  patches = train_images[:,:dsize];
+  patches = train_images[:,:dsize].astype(dtype);
   fs = [dsize, 28*28, 196, 28*28]
+
 
   # values from deeplearning.stanford.edu/wiki/index.php/UFLDL_Tutorial
   X0=patches
   lambda_=3e-3
   rho=tf.constant(0.1, dtype=dtype)
   beta=3
-  W0f = W_uniform(fs[2],fs[3])
+  W0f = u.W_uniform(fs[2],fs[3])
 
   def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
   dsize = f(-1)
@@ -116,8 +69,6 @@ def main():
     return var
 
   lr = init_var(0.2, "lr")
-  if purely_linear:   # need lower LR without sigmoids
-    lr = init_var(.02, "lr")
     
   Wf = init_var(W0f, "Wf", True)
   Wf_copy = init_var(W0f, "Wf_copy", True)
@@ -126,16 +77,10 @@ def main():
   W.insert(0, X)
 
   def sigmoid(x):
-    if not purely_linear:
-      return tf.sigmoid(x)
-    else:
-      return tf.identity(x)
+    return tf.sigmoid(x)
       
   def d_sigmoid(y):
-    if not purely_linear:
-      return y*(1-y)
-    else:
-      return 1
+    return y*(1-y)
     
   def kl(x, y):
     return x * tf.log(x / y) + (1 - x) * tf.log((1 - x) / (1 - y))
@@ -146,9 +91,6 @@ def main():
   # A[n+1] = network output
   A = [None]*(n+2)
 
-  # A[0] is just for shape checks, assert fail on run
-  # tf.assert always fails because of static assert
-  # fail_node = tf.assert_equal(1, 0, message="too huge")
   fail_node = tf.Print(0, [0], "fail, this must never run")
   with tf.control_dependencies([fail_node]):
     A[0] = u.Identity(dsize, dtype=dtype)
@@ -171,9 +113,6 @@ def main():
   for i in range(n-1, -1, -1):
     backprop = t(W[i+1]) @ B[i+1]
     backprop2 = t(W[i+1]) @ B2[i+1]
-    if i == 1 and not drop_sparsity:
-      backprop += beta*d_kl(rho, rho_hat)
-      backprop2 += beta*d_kl(rho, rho_hat)
     B[i] = backprop*d_sigmoid(A[i+1])
     B2[i] = backprop2*d_sigmoid(A[i+1])
 
@@ -191,46 +130,26 @@ def main():
     cov_B2[i] = init_var(B2[i]@t(B2[i])/dsize, "cov_B2%d"%(i,))
     vars_svd_A[i] = u.SvdWrapper(cov_A[i],"svd_A_%d"%(i,))
     vars_svd_B2[i] = u.SvdWrapper(cov_B2[i],"svd_B2_%d"%(i,))
-    if use_tikhonov:
-      whitened_A = u.regularized_inverse2(vars_svd_A[i],L=Lambda) @ A[i]
-    else:
-      whitened_A = u.pseudo_inverse2(vars_svd_A[i]) @ A[i]
-    if use_tikhonov:
-      whitened_B2 = u.regularized_inverse2(vars_svd_B2[i],L=Lambda) @ B[i]
-    else:
-      whitened_B2 = u.pseudo_inverse2(vars_svd_B2[i]) @ B[i]
-    whitened_A_stable = u.pseudo_inverse_sqrt2(vars_svd_A[i]) @ A[i]
-    whitened_B2_stable = u.pseudo_inverse_sqrt2(vars_svd_B2[i]) @ B[i]
-    pre_dW[i] = (whitened_B2 @ t(whitened_A))/dsize
-    pre_dW_stable[i] = (whitened_B2_stable @ t(whitened_A_stable))/dsize
+    whitened_A = u.regularized_inverse2(vars_svd_A[i],L=lambda_) @ A[i]
+    whitened_B = u.regularized_inverse2(vars_svd_B2[i],L=lambda_) @ B[i]
+    pre_dW[i] = (whitened_B @ t(whitened_A))/dsize
     dW[i] = (B[i] @ t(A[i]))/dsize
 
   # Loss function
   reconstruction = u.L2(err) / (2 * dsize)
-  sparsity = beta * tf.reduce_sum(kl(rho, rho_hat))
-  L2 = (lambda_ / 2) * (u.L2(W[1]) + u.L2(W[1]))
 
   loss = reconstruction
-  if not drop_l2:
-    loss = loss + L2
-  if not drop_sparsity:
-    loss = loss + sparsity
 
   grad_live = u.flatten(dW[1:])
   pre_grad_live = u.flatten(pre_dW[1:]) # fisher preconditioned gradient
-  pre_grad_stable_live = u.flatten(pre_dW_stable[1:]) # sqrt fisher preconditioned grad
   grad = init_var(grad_live, "grad")
   pre_grad = init_var(pre_grad_live, "pre_grad")
-  pre_grad_stable = init_var(pre_grad_stable_live, "pre_grad_stable")
 
   update_params_op = Wf.assign(Wf-lr*pre_grad).op
-  update_params_stable_op = Wf.assign(Wf-lr*pre_grad_stable).op
   save_params_op = Wf_copy.assign(Wf).op
   pre_grad_dot_grad = tf.reduce_sum(pre_grad*grad)
-  pre_grad_stable_dot_grad = tf.reduce_sum(pre_grad*grad)
   grad_norm = tf.reduce_sum(grad*grad)
   pre_grad_norm = u.L2(pre_grad)
-  pre_grad_stable_norm = u.L2(pre_grad_stable)
 
   def dump_svd_info(step):
     """Dump singular values and gradient values in those coordinates."""
@@ -263,12 +182,9 @@ def main():
     sess.run(ops_A+ops_B2)
 
   def update_svds():
-    if whitening_mode>1:
-      vars_svd_A[2].update()
-    if whitening_mode>2:
-      vars_svd_B2[2].update()
-    if whitening_mode>3:
-      vars_svd_B2[1].update()
+    vars_svd_A[2].update()
+    vars_svd_B2[2].update()
+    vars_svd_B2[1].update()
 
   def init_svds():
     """Initialize our SVD to identity matrices."""
@@ -280,7 +196,6 @@ def main():
     sess.run(ops)
       
   init_op = tf.global_variables_initializer()
-  #  tf.get_default_graph().finalize()
 
   from tensorflow.core.protobuf import rewriter_config_pb2
   
@@ -292,7 +207,7 @@ def main():
   graph_options=tf.GraphOptions(optimizer_options=optimizer_options,
                                 rewrite_options=rewrite_options)
   config = tf.ConfigProto(graph_options=graph_options)
-  #sess = tf.Session(config=config)
+
   sess = tf.InteractiveSession(config=config)
   sess.run(Wf.initializer, feed_dict=init_dict)
   sess.run(X.initializer, feed_dict=init_dict)
@@ -306,13 +221,6 @@ def main():
 
   step_lengths = []     # keep track of learning rates
   losses = []
-  ratios = []           # actual loss decrease / expected decrease
-  grad_norms = []       
-  pre_grad_norms = []   # preconditioned grad norm squared
-  pre_grad_stable_norms = [] # sqrt preconditioned grad norms squared
-  target_delta_list = []     # predicted decrease linear approximation
-  target_delta2_list = []    # predicted decrease quadratic appromation
-  actual_delta_list = []      # actual decrease
   
   # adaptive line search parameters
   alpha=0.3   # acceptable fraction of predicted decrease
@@ -325,136 +233,28 @@ def main():
     sess.run(cov_B2[i].initializer)
 
   # only update whitening matrix of input activations in the beginning
-  if whitening_mode>0:
-    vars_svd_A[1].update()
+  vars_svd_A[1].update()
 
-  # compute t(delta).H.delta/2
-  def hessian_quadratic(delta):
-    #    update_covariances()
-    W = u.unflatten(delta, fs[1:])
-    W.insert(0, None)
-    total = 0
-    for l in range(1, n+1):
-      decrement = tf.trace(t(W[l])@cov_B2[l]@W[l]@cov_A[l])
-      total+=decrement
-    return (total/2).eval()
-    
-  # compute t(delta).H^-1.delta/2
-  def hessian_quadratic_inv(delta):
-    #    update_covariances()
-    W = u.unflatten(delta, fs[1:])
-    W.insert(0, None)
-    total = 0
-    for l in range(1, n+1):
-      invB2 = u.pseudo_inverse2(vars_svd_B2[l])
-      invA = u.pseudo_inverse2(vars_svd_A[l])
-      decrement = tf.trace(t(W[l])@invB2@W[l]@invA)
-      total+=decrement
-    return (total/2).eval()
-
-  # do line search, dump values as csv
-  def line_search(initial_value, direction, step, num_steps):
-    saved_val = tf.Variable(Wf)
-    sess.run(saved_val.initializer)
-    pl = tf.placeholder(dtype, shape=(), name="linesearch_p")
-    assign_op = Wf.assign(initial_value - direction*step*pl)
-    vals = []
-    for i in range(num_steps):
-      sess.run(assign_op, feed_dict={pl: i})
-      vals.append(loss.eval())
-    sess.run(Wf.assign(saved_val)) # restore original value
-    return vals
-    
-  for step in range(num_steps): 
+  for step in range(40): 
     update_covariances()
-    if step % whiten_every_n_steps==0:
-      update_svds()
+    update_svds()
 
     sess.run(grad.initializer)
     sess.run(pre_grad.initializer)
     
     lr0, loss0 = sess.run([lr, loss])
-    save_params_op.run()
-
-    # regular inverse becomes unstable when grad norm exceeds 1
-    stabilized_mode = grad_norm.eval()<1
-
-    if stabilized_mode and not use_tikhonov:
-      update_params_stable_op.run()
-    else:
-      update_params_op.run()
-
+    update_params_op.run()
     loss1 = loss.eval()
     advance_batch()
 
-    # line search stuff
-    target_slope = (-pre_grad_dot_grad.eval() if stabilized_mode else
-                    -pre_grad_stable_dot_grad.eval())
-    target_delta = lr0*target_slope
-    target_delta_list.append(target_delta)
-
-    # second order prediction of target delta
-    # TODO: the sign is wrong, debug this
-    # https://www.wolframcloud.com/objects/8f287f2f-ceb7-42f7-a599-1c03fda18f28
-    if local_quadratics:
-      x0 = Wf_copy.eval()
-      x_opt = x0-pre_grad.eval()
-      # computes t(x)@H^-1 @(x)/2
-      y_opt = loss0 - hessian_quadratic_inv(grad)
-      # computes t(x)@H @(x)/2
-      y_expected = hessian_quadratic(Wf-x_opt)+y_opt
-      target_delta2 = y_expected - loss0
-      target_delta2_list.append(target_delta2)
-      
-    
-    actual_delta = loss1 - loss0
-    actual_slope = actual_delta/lr0
-    slope_ratio = actual_slope/target_slope  # between 0 and 1.01
-    actual_delta_list.append(actual_delta)
-
-    if do_line_search:
-      vals1 = line_search(Wf_copy, pre_grad, lr/100, 40)
-      vals2 = line_search(Wf_copy, grad, lr/100, 40)
-      u.dump(vals1, "line1-%d"%(i,))
-      u.dump(vals2, "line2-%d"%(i,))
       
     losses.append(loss0)
     step_lengths.append(lr0)
-    ratios.append(slope_ratio)
-    grad_norms.append(grad_norm.eval())
-    pre_grad_norms.append(pre_grad_norm.eval())
-    pre_grad_stable_norms.append(pre_grad_stable_norm.eval())
 
-    if step % report_frequency == 0:
-      print("Step %d loss %.2f, target decrease %.3f, actual decrease, %.3f ratio %.2f grad norm: %.2f pregrad norm: %.2f"%(step, loss0, target_delta, actual_delta, slope_ratio, grad_norm.eval(), pre_grad_norm.eval()))
-    
-    if adaptive_step_frequency and adaptive_step and step>adaptive_step_burn_in:
-      # shrink if wrong prediction, don't shrink if prediction is tiny
-      if slope_ratio < alpha and abs(target_delta)>1e-6 and adaptive_step:
-        print("%.2f %.2f %.2f"%(loss0, loss1, slope_ratio))
-        print("Slope optimality %.2f, shrinking learning rate to %.2f"%(slope_ratio, lr0*beta,))
-        sess.run(vard[lr].setter, feed_dict={vard[lr].p: lr0*beta})
-        
-      # grow learning rate, slope_ratio .99 worked best for gradient
-      elif step>0 and i%50 == 0 and slope_ratio>0.90 and adaptive_step:
-          print("%.2f %.2f %.2f"%(loss0, loss1, slope_ratio))
-          print("Growing learning rate to %.2f"%(lr0*growth_rate))
-          sess.run(vard[lr].setter, feed_dict={vard[lr].p:
-                                               lr0*growth_rate})
-
+    print("Step %d loss %.2f"%(step, loss0))
     u.record_time()
 
-  # check against expected loss
-  if 'Apple' in sys.version:
-    pass
-    #    u.dump(losses, "kfac_small_final_mac.csv")
-    targets = np.loadtxt("data/kfac_small_final_mac.csv", delimiter=",")
-  else:
-    pass
-    #    u.dump(losses, "kfac_small_final_linux.csv")
-    targets = np.loadtxt("data/kfac_small_final_linux.csv", delimiter=",")
-
-  u.check_equal(targets, losses[:len(targets)], rtol=1e-1)
+  assert losses[-1]<5
   u.summarize_time()
   print("Test passed")
 
