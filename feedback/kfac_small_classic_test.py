@@ -128,10 +128,12 @@ def main():
   for i in range(1,n+1):
     cov_A[i] = init_var(A[i]@t(A[i])/dsize, "cov_A%d"%(i,))
     cov_B2[i] = init_var(B2[i]@t(B2[i])/dsize, "cov_B2%d"%(i,))
-    vars_svd_A[i] = u.SvdWrapper(cov_A[i],"svd_A_%d"%(i,))
-    vars_svd_B2[i] = u.SvdWrapper(cov_B2[i],"svd_B2_%d"%(i,))
-    whitened_A = u.regularized_inverse2(vars_svd_A[i],L=lambda_) @ A[i]
-    whitened_B = u.regularized_inverse2(vars_svd_B2[i],L=lambda_) @ B[i]
+    vars_svd_A[i] = u.SvdWrapper(cov_A[i],"svd_A_%d"%(i,), do_inverses=True,
+                                 lambda_=lambda_)
+    vars_svd_B2[i] = u.SvdWrapper(cov_B2[i],"svd_B2_%d"%(i,), do_inverses=True,
+                                  lambda_=lambda_)
+    whitened_A = u.cached_inverse(vars_svd_A[i],lambda_) @ A[i]
+    whitened_B = u.cached_inverse(vars_svd_B2[i],lambda_) @ B[i]
     pre_dW[i] = (whitened_B @ t(whitened_A))/dsize
     dW[i] = (B[i] @ t(A[i]))/dsize
 
@@ -244,7 +246,6 @@ def main():
     
     lr0, loss0 = sess.run([lr, loss])
     update_params_op.run()
-    loss1 = loss.eval()
     advance_batch()
 
       

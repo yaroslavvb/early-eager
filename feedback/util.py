@@ -177,6 +177,11 @@ def pseudo_inverse_stable(svd, eps=1e-7):
 def regularized_inverse(mat, l=0.1):
   return tf.matrix_inverse(mat + l*Identity(int(mat.shape[0])))
 
+def cached_inverse(svd, dummy_lambda):
+  assert svd.do_inverses
+  assert dummy_lambda == svd.lambda_
+  return svd.cached.inv
+  
 # TODO: this gives biased result when I use identity
 def regularized_inverse2(svd, L=1e-3):
   """Regularized inverse, working from SVD"""
@@ -639,6 +644,7 @@ def record_time():
   new_time = time.perf_counter()
   global_time_list.append(new_time - global_last_time)
   global_last_time = time.perf_counter()
+  print("Step: ", global_time_list[-1])
 
 def last_time():
   global global_last_time, global_time_list
@@ -858,13 +864,15 @@ class SvdWrapper:
   Access result as TF vars: wrapper.s, wrapper.u, wrapper.v
   """
   
-  def __init__(self, target, name, do_inverses=False, use_resource=False):
+  def __init__(self, target, name, do_inverses=False, use_resource=False,
+               lambda_=0):
     self.name = name
     self.target = target
     self.do_inverses = do_inverses
     self.tf_svd = SvdTuple(tf.svd(target))
     self.update_counter = 0
     self.use_resource = use_resource
+    self.lambda_ = lambda_
 
     self.init = SvdTuple(
       ones(target.shape[0], name=name+"_s_init"),
@@ -951,7 +959,9 @@ class SvdWrapper:
   def update_scipy_inv(self):
     sess = u.get_default_session()
     target0 = sess.run(self.target)
-    inv0 = linalg.inv(target0)
+    assert default_dtype == tf.float32
+    numpy_diag = np.diag(np.ones([target0.shape[0]], dtype=np.float32))
+    inv0 = linalg.inv(target0+self.lambda_*numpy_diag)
     feed_dict = {self.holder.inv: inv0}
     sess.run(self.update_externalinv_op, feed_dict=feed_dict)
   
