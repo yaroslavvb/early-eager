@@ -19,8 +19,17 @@ from collections import defaultdict
 util = sys.modules[__name__]   
 u = util
 
+# for line profiling
+try:
+  profile  # throws an exception when profile isn't defined
+except NameError:
+  profile = lambda x: x   # if it's not defined simply ignore the decorator.
 
-default_dtype = tf.float32
+
+default_tf_dtype = tf.float32
+default_np_dtype = np.float32
+default_dtype = default_tf_dtype
+
 USE_MKL_SVD=True                   # Tensorflow vs MKL SVD
 DUMP_BAD_SVD=False                 # when SVD fails, dump matrix to temp
 
@@ -32,31 +41,10 @@ from scipy import linalg
 
 # TODO: speed-up tests by reusing session
 
-
-def load_MNIST_images(filename):
-  """
-  returns a 28x28x[number of MNIST images] matrix containing
-  the raw MNIST images
-  :param filename: input data file
-  """
-  with open(filename, "r") as f:
-    magic = np.fromfile(f, dtype=np.dtype('>i4'), count=1)
-
-    num_images = int(np.fromfile(f, dtype=np.dtype('>i4'), count=1))
-    num_rows = int(np.fromfile(f, dtype=np.dtype('>i4'), count=1))
-    num_cols = int(np.fromfile(f, dtype=np.dtype('>i4'), count=1))
-
-    images = np.fromfile(f, dtype=np.ubyte)
-    images = images.reshape((num_images, num_rows * num_cols)).transpose()
-    images = images.astype(np.float64) / 255
-
-    f.close()
-
-    return images
-
-
 args = None  # TODO: replace with object that crashes on access
 def set_global_args(local_args):
+  """Sets args to be reused across several modules. Access as
+  util.args.somesetting """
   global args
   assert args is None
   args = local_args
@@ -177,11 +165,6 @@ def pseudo_inverse_stable(svd, eps=1e-7):
 def regularized_inverse(mat, l=0.1):
   return tf.matrix_inverse(mat + l*Identity(int(mat.shape[0])))
 
-def cached_inverse(svd, dummy_lambda):
-  assert svd.do_inverses
-  assert dummy_lambda == svd.lambda_
-  return svd.cached.inv
-  
 # TODO: this gives biased result when I use identity
 def regularized_inverse2(svd, L=1e-3):
   """Regularized inverse, working from SVD"""
@@ -234,7 +217,6 @@ def pseudo_inverse_scipy(tensor):
                         [dtype])[0]
     result.set_shape(tensor.shape)
     return result
-  
   
 
 def Identity(n, dtype=None, name=None):
@@ -644,9 +626,10 @@ def record_time():
   new_time = time.perf_counter()
   global_time_list.append(new_time - global_last_time)
   global_last_time = time.perf_counter()
-  print("Step: ", global_time_list[-1])
+  #print("step: %.2f"%(global_time_list[-1]*1000))
 
 def last_time():
+  """Returns last interval records in millis."""
   global global_last_time, global_time_list
   if global_time_list:
     return 1000*global_time_list[-1]
@@ -777,7 +760,6 @@ class timeit:
     self.end = time.perf_counter()
     interval_ms = 1000*(self.end - self.start)
     global_timeit_dict.setdefault(self.tag, []).append(interval_ms)
-    print("    %s Elapsed: %.2f ms"%(self.tag, interval_ms))
     logger = u.get_last_logger(skip_existence_check=True)
     if logger:
       newtag = 'time/'+self.tag
@@ -864,15 +846,13 @@ class SvdWrapper:
   Access result as TF vars: wrapper.s, wrapper.u, wrapper.v
   """
   
-  def __init__(self, target, name, do_inverses=False, use_resource=False,
-               lambda_=0):
+  def __init__(self, target, name, do_inverses=False, use_resource=False):
     self.name = name
     self.target = target
     self.do_inverses = do_inverses
     self.tf_svd = SvdTuple(tf.svd(target))
     self.update_counter = 0
     self.use_resource = use_resource
-    self.lambda_ = lambda_
 
     self.init = SvdTuple(
       ones(target.shape[0], name=name+"_s_init"),
@@ -949,7 +929,8 @@ class SvdWrapper:
   def update_tf(self):
     sess = u.get_default_session()
     sess.run(self.update_tf_op)
-    
+
+  @profile
   def update_scipy(self):
     if self.do_inverses:
       return self.update_scipy_inv()
@@ -959,9 +940,7 @@ class SvdWrapper:
   def update_scipy_inv(self):
     sess = u.get_default_session()
     target0 = sess.run(self.target)
-    assert default_dtype == tf.float32
-    numpy_diag = np.diag(np.ones([target0.shape[0]], dtype=np.float32))
-    inv0 = linalg.inv(target0+self.lambda_*numpy_diag)
+    inv0 = linalg.inv(target0)
     feed_dict = {self.holder.inv: inv0}
     sess.run(self.update_externalinv_op, feed_dict=feed_dict)
   
@@ -1285,7 +1264,34 @@ def eval(tensor):
   assert sess
   return sess.run(tensor)
 
-def get_mnist_images():
+def run(fetches):
+  return u.eval(fetches)
+  
+timeline_counter = 0
+run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+def traced_run(fetches):
+  """Runs fetches, dumps timeline files in current directory."""
+  global sess
+  assert sess
+  global timeline_counter
+  run_metadata = tf.RunMetadata()
+
+  root = os.getcwd()+"/data"
+  from tensorflow.python.client import timeline
+
+  results = sess.run(fetches,
+                     options=run_options,
+                     run_metadata=run_metadata);
+  tl = timeline.Timeline(step_stats=run_metadata.step_stats)
+  ctf = tl.generate_chrome_trace_format(show_memory=True,
+                                          show_dataflow=False)
+  open(root+"/timeline_%d.json"%(timeline_counter,), "w").write(ctf)
+  open(root+"/stepstats_%d.pbtxt"%(timeline_counter,), "w").write(str(
+    run_metadata.step_stats))
+  timeline_counter+=1
+  return results  
+
+def get_mnist_images(fold='train'):
   import gzip
   from tensorflow.contrib.learn.python.learn.datasets import base
   import numpy
@@ -1299,7 +1305,7 @@ def get_mnist_images():
     Raises:
       ValueError: If the bytestream does not start with 2051.
     """
-    print('Extracting', f.name)
+    print('Extracting', f.name) # todo: remove
     with gzip.GzipFile(fileobj=f) as bytestream:
       magic = _read32(bytestream)
       if magic != 2051:
@@ -1317,23 +1323,44 @@ def get_mnist_images():
     dt = numpy.dtype(numpy.uint32).newbyteorder('>')
     return numpy.frombuffer(bytestream.read(4), dtype=dt)[0]
 
-  TRAIN_IMAGES = 'train-images-idx3-ubyte.gz'
+  if fold == 'train': # todo: rename
+    TRAIN_IMAGES = 'train-images-idx3-ubyte.gz'
+  elif fold == 'test':
+    TRAIN_IMAGES = 't10k-images-idx3-ubyte.gz'
+  else:
+    assert False, 'unknown fold %s'%(fold)
+    
   source_url = 'https://storage.googleapis.com/cvdf-datasets/mnist/'
   local_file = base.maybe_download(TRAIN_IMAGES, '/tmp',
                                      source_url + TRAIN_IMAGES)
   train_images = extract_images(open(local_file, 'rb'))
-  train_images = train_images.reshape(60000, 28**2).T.astype(np.float64)/255
-  return train_images
+  dsize = train_images.shape[0]
+  if fold == 'train':
+    assert dsize == 60000
+  else:
+    assert dsize == 10000
+  
+  train_images = train_images.reshape(dsize, 28**2).T.astype(np.float64)/255
+  return train_images.astype(default_np_dtype)
+
+regularizer_cache = {}
+def cachedGpuIdentityRegularizer(n, Lambda):
+  global regularizer_cache
+
+  n = int(n)
+  if (n, Lambda) not in regularizer_cache:
+    numpy_diag = Lambda*np.diag(np.ones([n]))
+    numpy_diag = numpy_diag.astype(default_np_dtype)
+    with tf.device("/gpu:0"):
+      regularizer_cache[(n, Lambda)] = tf.constant(numpy_diag)
+      
+  return regularizer_cache[(n, Lambda)]
 
 # helper utilities
-def W_uniform(s1, s2): # uniform weight init from Ng UFLDL
+def ng_init(s1, s2): # uniform weight init from Ng UFLDL
   r = np.sqrt(6) / np.sqrt(s1 + s2 + 1)
-  return np.random.random(2*s2*s1)*2*r-r
-
-
-def check_mkl():
-  assert np.__config__.get_info("lapack_mkl_info"), "No MKL detected :("
-  print("Using MKL")
+  flat = np.random.random(s1*s2)*2*r-r
+  return flat.reshape([s1, s2]).astype(default_np_dtype)
 
 
 if __name__=='__main__':
