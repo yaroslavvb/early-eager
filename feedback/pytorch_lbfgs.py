@@ -13,8 +13,8 @@ args.cuda = not args.no_cuda and torch.cuda.is_available()
 
 step = 0
 def main():
-  torch.manual_seed(0)
-  np.random.seed(0)
+  torch.manual_seed(args.seed)
+  np.random.seed(args.seed)
   if args.cuda:
     torch.cuda.manual_seed(args.seed)
 
@@ -34,9 +34,7 @@ def main():
     def forward(self, input):
       x = input.view(-1, args.visible_size)
       x = torch.sigmoid(torch.mm(x, self.encoder))
-      x = F.sigmoid(x)
-      x = torch.mm(x, torch.transpose(self.encoder, 0, 1))
-      x = F.sigmoid(x)
+      x = torch.sigmoid(torch.mm(x, torch.transpose(self.encoder, 0, 1)))
       return x.view_as(input)
 
   # initialize model and weights
@@ -47,7 +45,11 @@ def main():
     model.cuda()
   
   model.train()
-  optimizer = optim.LBFGS(model.parameters(), max_iter=args.iters, lr=args.lr)
+  if args.gd:
+    optimizer = optim.SGD(model.parameters(), lr=args.lr)
+  else:
+    optimizer = optim.LBFGS(model.parameters(), max_iter=args.iters, lr=args.lr)
+
   def closure():
     global step
     optimizer.zero_grad()
@@ -60,9 +62,13 @@ def main():
     u.record_time()
     return loss
   
-  optimizer.step(closure)
-  
-
+  if args.gd:
+    iters = args.iters
+  else:
+    iters = 1
+  for i in range(args.iters):
+    optimizer.step(closure)
+    
   u.summarize_time()
     
 
