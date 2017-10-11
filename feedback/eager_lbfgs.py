@@ -2,6 +2,8 @@ import util as u
 
 import tensorflow as tf
 import numpy as np
+import time
+
 from tensorflow.contrib.eager.python import tfe
 tfe.enable_eager_execution()
 
@@ -9,9 +11,15 @@ import common_gd
 args = common_gd.args
 args.cuda = not args.no_cuda and (tfe.num_gpus() > 0)
 
+def dot(a, b):
+  """Dot product function since TensorFlow doesn't have one."""
+  return tf.reduce_sum(a*b)
+
+def verbose_func(s):
+  print(s)
+  
 def lbfgs(opfunc, x, config, state):
-  """Line-by-line port of lbfgs.lua, using TensorFlow imperative mode.
-  Inspired by Mark Schmidt's minfunc.m
+  """port of lbfgs.lua, using TensorFlow eager mode.
   """
   
   maxIter = config.maxIter or 20
@@ -39,8 +47,8 @@ def lbfgs(opfunc, x, config, state):
   p = g.shape[0]
 
   # check optimality of initial point
-  tmp1 = ti.abs(g)
-  if ti.reduce_sum(tmp1) <= tolFun:
+  tmp1 = tf.abs(g)
+  if tf.reduce_sum(tmp1) <= tolFun:
     verbose("optimality condition below tolFun")
     return x, f_hist
 
@@ -126,8 +134,8 @@ def lbfgs(opfunc, x, config, state):
 
     # reset initial guess for step size
     if state.nIter == 1:
-      tmp1 = ti.abs(g)
-      t = min(1, 1/ti.reduce_sum(tmp1))
+      tmp1 = tf.abs(g)
+      t = min(1, 1/tf.reduce_sum(tmp1))
     else:
       t = learningRate
 
@@ -160,8 +168,6 @@ def lbfgs(opfunc, x, config, state):
     ## check conditions
     ############################################################
     if nIter == maxIter:
-      # no use to run tests
-      verbose('reached max number of iterations')
       break
 
     if currentFuncEval >= maxEval:
@@ -169,30 +175,27 @@ def lbfgs(opfunc, x, config, state):
       verbose('max nb of function evals')
       break
 
-    tmp1 = ti.abs(g)
-    if ti.reduce_sum(tmp1) <=tolFun:
+    tmp1 = tf.abs(g)
+    if tf.reduce_sum(tmp1) <=tolFun:
       # check optimality
       verbose('optimality condition below tolFun')
       break
     
-    tmp1 = ti.abs(d*t)
-    if ti.reduce_sum(tmp1) <= tolX:
+    tmp1 = tf.abs(d*t)
+    if tf.reduce_sum(tmp1) <= tolX:
       # step size below tolX
       verbose('step size below tolX')
       break
 
-    if ti.abs(f-f_old) < tolX:
+    if tf.abs(f-f_old) < tolX:
       # function value changing less than tolX
-      verbose('function value changing less than tolX'+str(ti.abs(f-f_old)))
+      verbose('function value changing less than tolX'+str(tf.abs(f-f_old)))
       break
 
 
-    elapsed_time = time.time()-start_time
-    times.append(elapsed_time)
-    print("%3d  val %10.3f  %.2f sec" %(nIter, f.as_numpy(), elapsed_time))
+    print("Step %3d loss %6.5f"%(nIter, f.numpy()))
+    u.record_time()
 
-  print("Min time: %10.3f, median time: %10.3f" %(min(times), np.median(times)))
-    
   # save state
   state.old_dirs = old_dirs
   state.old_stps = old_stps
@@ -261,11 +264,9 @@ def main():
   else:
     state = Struct()
     config = Struct()
-    config.nCorrection = 5
-    config.maxIter = 100
+    config.maxIter = args.iters
     config.verbose = True
-    opfunc = 1
-    x, f_hist, currentFuncEval = lbfgs(opfunc, x0, config, state)
+    x, f_hist, currentFuncEval = lbfgs(opfunc, W_flat, config, state)
   
   u.summarize_time()
     

@@ -66,7 +66,7 @@ def main():
     iters = args.iters
   else:
     iters = 1
-  for i in range(args.iters):
+  for i in range(iters):
     optimizer.step(closure)
     
   u.summarize_time()
