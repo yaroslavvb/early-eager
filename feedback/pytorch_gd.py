@@ -12,8 +12,8 @@ args = common_gd.args
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
 def main():
-  torch.manual_seed(0)
-  np.random.seed(0)
+  torch.manual_seed(args.seed)
+  np.random.seed(args.seed)
   if args.cuda:
     torch.cuda.manual_seed(args.seed)
 

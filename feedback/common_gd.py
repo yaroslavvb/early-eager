@@ -15,4 +15,6 @@ parser.add_argument('--hidden-size', type=int, default=196, metavar='H',
                     help='hidden size')
 parser.add_argument('--visible-size', type=int, default=784, metavar='V',
                     help='visible-size')
+parser.add_argument('--gd', action='store_true', default=False,
+                    help='force run of gradient descent instead of lbfgs')
 args = parser.parse_args()
