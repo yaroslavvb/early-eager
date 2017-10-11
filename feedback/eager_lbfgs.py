@@ -204,6 +204,16 @@ def lbfgs(opfunc, x, config, state):
 
   return x, f_hist, currentFuncEval
 
+# dummy/Struct gives Lua-like struct object with 0 defaults
+class dummy(object):
+  pass
+
+class Struct(dummy):
+  def __getattribute__(self, key):
+    if key == '__dict__':
+      return super(dummy, self).__getattribute__('__dict__')
+    return self.__dict__.get(key, 0)
+
 def main():
   tf.set_random_seed(args.seed)
   np.random.seed(args.seed)
@@ -222,34 +232,40 @@ def main():
   device_ctx = tf.device(device)
   device_ctx.__enter__()
   
-  encoder = tf.layers.Dense(units=args.hidden_size, use_bias=False,
-                          activation=tf.sigmoid)
+  W = tfe.Variable(tf.zeros([args.visible_size, args.hidden_size]))
 
-  def loss_fn(inputs):
-    x = encoder(inputs)
-    predictions = tf.sigmoid(tf.matmul(x, encoder.kernel, transpose_b=True))
-    return tf.reduce_mean(tf.square(predictions-inputs))
+  def loss_fn(w):
+    x = tf.matmul(data, w)
+    x = tf.sigmoid(x)
+    x = tf.matmul(x, w, transpose_b=True)
+    x = tf.sigmoid(x)
+    return tf.reduce_mean(tf.square(x-data))
 
-  value_and_gradients_fn = tfe.implicit_value_and_gradients(loss_fn)
-  def flat_value_and_gradients_fn(params):
+  value_and_gradients_fn = tfe.value_and_gradients_function(loss_fn)
+  def opfunc(params):
     pass
 
   # initialize weights
-  loss_fn(data)
   init_val = u.ng_init(args.visible_size, args.hidden_size)
-  encoder.kernel.assign(init_val)
+  W.assign(init_val)
 
   if args.gd:
     for step in range(args.iters):
-      value, grads_and_vars = value_and_gradients_fn(data)
-      [(grad,var)]=grads_and_vars
-      var.assign_sub(grad*args.lr)
+      value, grads = value_and_gradients_fn(W)
+      grad = grads[0]
+      W.assign_sub(grad*args.lr)
 
       print("Step %3d loss %6.5f"%(step, value.numpy()))
       u.record_time()
 
   else:
-    pass
+    state = Struct()
+    config = Struct()
+    config.nCorrection = 5
+    config.maxIter = 100
+    config.verbose = True
+    opfunc = 1
+    x, f_hist, currentFuncEval = lbfgs(opfunc, x0, config, state)
   
   u.summarize_time()
     
