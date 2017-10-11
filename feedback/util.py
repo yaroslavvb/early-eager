@@ -1292,6 +1292,8 @@ def traced_run(fetches):
   return results  
 
 def get_mnist_images(fold='train'):
+  """Returns mnist images, batch dimension last."""
+  
   import gzip
   from tensorflow.contrib.learn.python.learn.datasets import base
   import numpy
@@ -1305,7 +1307,7 @@ def get_mnist_images(fold='train'):
     Raises:
       ValueError: If the bytestream does not start with 2051.
     """
-    print('Extracting', f.name) # todo: remove
+    #    print('Extracting', f.name) # todo: remove
     with gzip.GzipFile(fileobj=f) as bytestream:
       magic = _read32(bytestream)
       if magic != 2051:
