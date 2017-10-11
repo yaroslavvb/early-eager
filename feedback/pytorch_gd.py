@@ -9,14 +9,20 @@ import numpy as np
 
 import common_gd
 args = common_gd.args
+args.cuda = not args.no_cuda and torch.cuda.is_available()
 
 def main():
   torch.manual_seed(0)
   np.random.seed(0)
+  if args.cuda:
+    torch.cuda.manual_seed(args.seed)
+
   
-  images = u.get_mnist_images().T 
+  images = torch.Tensor(u.get_mnist_images().T)
   images = images[:args.batch_size]
-  data = Variable(torch.Tensor(images))
+  if args.cuda:
+    images = images.cuda()
+  data = Variable(images)
 
   class Net(nn.Module):
     def __init__(self):
@@ -37,6 +43,8 @@ def main():
   params1, params2 = list(model.parameters())
   params1.data = torch.Tensor(u.ng_init(args.visible_size, args.hidden_size).T)
   params2.data = torch.Tensor(u.ng_init(args.hidden_size, args.visible_size).T)
+  if args.cuda:
+    model.cuda()
   
   model.train()
   optimizer = optim.SGD(model.parameters(), lr=args.lr)

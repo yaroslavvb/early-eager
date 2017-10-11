@@ -1,14 +1,12 @@
 import argparse
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
 
-parser.add_argument('--batch-size', type=int, default=1000, metavar='N',
-                    help='input batch size for training (default: 64)')
-parser.add_argument('--iters', type=int, default=20, metavar='N',
+parser.add_argument('--batch-size', type=int, default=60000, metavar='N',
+                    help='input batch size for training')
+parser.add_argument('--iters', type=int, default=50, metavar='N',
                     help='number of iterations to run for (default: 20)')
 parser.add_argument('--lr', type=float, default=1.0, metavar='LR',
                     help='learning rate (default: 1.0)')
-parser.add_argument('--momentum', type=float, default=0.0, metavar='M',
-                    help='SGD momentum (default: 0.0)')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
 parser.add_argument('--seed', type=int, default=1, metavar='S',
