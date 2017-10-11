@@ -11,6 +11,7 @@ import common_gd
 args = common_gd.args
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
+step = 0
 def main():
   torch.manual_seed(0)
   np.random.seed(0)
@@ -27,37 +28,40 @@ def main():
   class Net(nn.Module):
     def __init__(self):
       super(Net, self).__init__()
-      self.encoder = nn.Linear(args.visible_size, args.hidden_size, bias=False)
-      self.decoder = nn.Linear(args.hidden_size, args.visible_size, bias=False)
+      self.encoder = nn.Parameter(torch.rand(args.visible_size,
+                                             args.hidden_size))
 
     def forward(self, input):
       x = input.view(-1, args.visible_size)
-      x = self.encoder(x)
+      x = torch.sigmoid(torch.mm(x, self.encoder))
       x = F.sigmoid(x)
-      x = self.decoder(x)
+      x = torch.mm(x, torch.transpose(self.encoder, 0, 1))
       x = F.sigmoid(x)
       return x.view_as(input)
 
   # initialize model and weights
   model = Net()
-  params1, params2 = list(model.parameters())
-  params1.data = torch.Tensor(u.ng_init(args.visible_size, args.hidden_size).T)
-  params2.data = torch.Tensor(u.ng_init(args.hidden_size, args.visible_size).T)
+  model.encoder.data = torch.Tensor(u.ng_init(args.visible_size,
+                                              args.hidden_size))
   if args.cuda:
     model.cuda()
   
   model.train()
-  optimizer = optim.SGD(model.parameters(), lr=args.lr)
-  for step in range(args.iters):
+  optimizer = optim.LBFGS(model.parameters(), max_iter=args.iters, lr=args.lr)
+  def closure():
+    global step
     optimizer.zero_grad()
     output = model(data)
     loss = F.mse_loss(output, data)
     loss0 = loss.data[0]
+    print("step %3d loss %6.5f"%(step, loss0))
+    step+=1
     loss.backward()
-    optimizer.step()
-    
-    print("Step %3d loss %6.5f"%(step, loss0))
     u.record_time()
+    return loss
+  
+  optimizer.step(closure)
+  
 
   u.summarize_time()
     
