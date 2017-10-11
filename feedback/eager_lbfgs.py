@@ -231,10 +231,11 @@ def main():
 
   device_ctx = tf.device(device)
   device_ctx.__enter__()
-  
-  W = tfe.Variable(tf.zeros([args.visible_size, args.hidden_size]))
 
-  def loss_fn(w):
+  W_flat = tfe.Variable(tf.zeros([args.visible_size*args.hidden_size]))
+  
+  def loss_fn(w_flat):
+    w = tf.reshape(w_flat, [args.visible_size, args.hidden_size])
     x = tf.matmul(data, w)
     x = tf.sigmoid(x)
     x = tf.matmul(x, w, transpose_b=True)
@@ -242,20 +243,19 @@ def main():
     return tf.reduce_mean(tf.square(x-data))
 
   value_and_gradients_fn = tfe.value_and_gradients_function(loss_fn)
-  def opfunc(params):
-    pass
-
+  def opfunc(x):  # returns (value, gradient)
+    value, grads = value_and_gradients_fn(x)
+    return value, grads[0]
+      
   # initialize weights
-  init_val = u.ng_init(args.visible_size, args.hidden_size)
-  W.assign(init_val)
+  W_flat.assign(u.ng_init(args.visible_size, args.hidden_size).flatten())
 
   if args.gd:
     for step in range(args.iters):
-      value, grads = value_and_gradients_fn(W)
-      grad = grads[0]
-      W.assign_sub(grad*args.lr)
+      f, g = opfunc(W_flat)
+      W_flat.assign_sub(g*args.lr)
 
-      print("Step %3d loss %6.5f"%(step, value.numpy()))
+      print("Step %3d loss %6.5f"%(step, f.numpy()))
       u.record_time()
 
   else:
