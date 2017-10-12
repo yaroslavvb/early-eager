@@ -121,7 +121,11 @@ def main():
     X = tf.constant(train_images[:,:dsize].astype(dtype))
 
 
-    Wf = tf.constant(u.W_uniform(fs[2],fs[3]).astype(dtype))
+    W0_0 = u.ng_init(fs[2],fs[3])
+    W1_0 = u.ng_init(fs[3], fs[2])
+    W0f = np.concatenate([W0_0.flatten(), W1_0.flatten()])
+    Wf = tf.constant(W0f)
+    assert Wf.dtype == tf.float32
     lr = tf.constant(0.2)
 
     for step in range(40):

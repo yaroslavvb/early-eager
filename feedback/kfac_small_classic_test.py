@@ -44,7 +44,9 @@ def main():
   lambda_=3e-3
   rho=tf.constant(0.1, dtype=dtype)
   beta=3
-  W0f = u.W_uniform(fs[2],fs[3])
+  W0_0 = u.ng_init(fs[2],fs[3])
+  W1_0 = u.ng_init(fs[3], fs[2])
+  W0f = np.concatenate([W0_0.flatten(), W1_0.flatten()])
 
   def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
   dsize = f(-1)
@@ -126,14 +128,14 @@ def main():
   vars_svd_A = [None]*(n+1)
   vars_svd_B2 = [None]*(n+1)
   for i in range(1,n+1):
-    cov_A[i] = init_var(A[i]@t(A[i])/dsize, "cov_A%d"%(i,))
-    cov_B2[i] = init_var(B2[i]@t(B2[i])/dsize, "cov_B2%d"%(i,))
-    vars_svd_A[i] = u.SvdWrapper(cov_A[i],"svd_A_%d"%(i,), do_inverses=True,
-                                 lambda_=lambda_)
-    vars_svd_B2[i] = u.SvdWrapper(cov_B2[i],"svd_B2_%d"%(i,), do_inverses=True,
-                                  lambda_=lambda_)
-    whitened_A = u.cached_inverse(vars_svd_A[i],lambda_) @ A[i]
-    whitened_B = u.cached_inverse(vars_svd_B2[i],lambda_) @ B[i]
+    cov_op = A[i]@t(A[i])/dsize + lambda_*u.Identity(A[i].shape[0])
+    cov_A[i] = init_var(cov_op, "cov_A%d"%(i,))
+    cov_op = B2[i]@t(B2[i])/dsize + lambda_*u.Identity(B2[i].shape[0])
+    cov_B2[i] = init_var(cov_op, "cov_B2%d"%(i,))
+    vars_svd_A[i] = u.SvdWrapper(cov_A[i],"svd_A_%d"%(i,), do_inverses=True)
+    vars_svd_B2[i] = u.SvdWrapper(cov_B2[i],"svd_B2_%d"%(i,), do_inverses=True)
+    whitened_A = vars_svd_A[i].inv @ A[i]
+    whitened_B = vars_svd_B2[i].inv @ B[i]
     pre_dW[i] = (whitened_B @ t(whitened_A))/dsize
     dW[i] = (B[i] @ t(A[i]))/dsize
 

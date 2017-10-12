@@ -39,8 +39,10 @@ if USE_MKL_SVD:
 
 from scipy import linalg
 
-# TODO: speed-up tests by reusing session
-
+def check_mkl():
+  assert np.__config__.get_info("lapack_mkl_info"), "No MKL detected :("
+  print("Using MKL")
+ 
 args = None  # TODO: replace with object that crashes on access
 def set_global_args(local_args):
   """Sets args to be reused across several modules. Access as
