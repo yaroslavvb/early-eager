@@ -1,4 +1,3 @@
-import util
 import util as u
 from util import t  # transpose
 u.check_mkl()
@@ -46,7 +45,7 @@ def main():
   beta=3
   W0_0 = u.ng_init(fs[2],fs[3])
   W1_0 = u.ng_init(fs[3], fs[2])
-  W0f = np.concatenate([W0_0.flatten(), W1_0.flatten()])
+  W0f = u.flatten([W0_0.flatten(), W1_0.flatten()])
 
   def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
   dsize = f(-1)
@@ -54,7 +53,7 @@ def main():
 
   # helper to create variables with numpy or TF initial value
   init_dict = {}     # {var_placeholder: init_value}
-  vard = {}          # {var: util.VarInfo}
+  vard = {}          # {var: u.VarInfo}
   def init_var(val, name, trainable=False, noinit=False):
     if isinstance(val, tf.Tensor):
       collections = [] if noinit else None
@@ -160,22 +159,22 @@ def main():
     for i in range(1, n+1):
       svd = vars_svd_A[i]
       s0, u0, v0 = sess.run([svd.s, svd.u, svd.v])
-      util.dump(s0, "A_%d_%d"%(i, step))
+      u.dump(s0, "A_%d_%d"%(i, step))
       A0 = A[i].eval()
       At0 = v0.T @ A0
-      util.dump(A0 @ A0.T, "Acov_%d_%d"%(i, step))
-      util.dump(At0 @ At0.T, "Atcov_%d_%d"%(i, step))
-      util.dump(s0, "As_%d_%d"%(i, step))
+      u.dump(A0 @ A0.T, "Acov_%d_%d"%(i, step))
+      u.dump(At0 @ At0.T, "Atcov_%d_%d"%(i, step))
+      u.dump(s0, "As_%d_%d"%(i, step))
 
     for i in range(1, n+1):
       svd = vars_svd_B2[i]
       s0, u0, v0 = sess.run([svd.s, svd.u, svd.v])
-      util.dump(s0, "B2_%d_%d"%(i, step))
+      u.dump(s0, "B2_%d_%d"%(i, step))
       B0 = B[i].eval()
       Bt0 = v0.T @ B0
-      util.dump(B0 @ B0.T, "Bcov_%d_%d"%(i, step))
-      util.dump(Bt0 @ Bt0.T, "Btcov_%d_%d"%(i, step))
-      util.dump(s0, "Bs_%d_%d"%(i, step))      
+      u.dump(B0 @ B0.T, "Bcov_%d_%d"%(i, step))
+      u.dump(Bt0 @ Bt0.T, "Btcov_%d_%d"%(i, step))
+      u.dump(s0, "Bs_%d_%d"%(i, step))      
     
   def advance_batch():
     sess.run(sampled_labels.initializer)  # new labels for next call
@@ -250,14 +249,15 @@ def main():
     update_params_op.run()
     advance_batch()
 
-      
     losses.append(loss0)
     step_lengths.append(lr0)
 
     print("Step %d loss %.2f"%(step, loss0))
     u.record_time()
 
-  assert losses[-1]<5
+  assert losses[-1]<0.59
+  assert losses[-1]>0.57
+  assert 20e-3<min(u.global_time_list)<50e-3, "Time should be 40ms on 1080"
   u.summarize_time()
   print("Test passed")
 

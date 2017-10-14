@@ -651,8 +651,8 @@ def summarize_time(time_list=None):
     min = np.min(time_list)
     median = np.median(time_list)
     formatted = ["%.2f"%(d,) for d in time_list[:10]]
-    print("Times: min: %.2f, median: %.2f, mean: %.2f"%(min, median, np.mean(time_list)))
-    #    print("Times: min: %.2f, median: %.2f, mean: %.2f"%(min, median,",".join(formatted)))
+    print("Times: min: %.2f, median: %.2f, mean: %.2f"%(min, median,
+                                                        np.mean(time_list)))
   else:
     print("Times: <empty>")
     

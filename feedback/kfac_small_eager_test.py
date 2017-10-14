@@ -123,14 +123,18 @@ def main():
 
     W0_0 = u.ng_init(fs[2],fs[3])
     W1_0 = u.ng_init(fs[3], fs[2])
-    W0f = np.concatenate([W0_0.flatten(), W1_0.flatten()])
+    W0f = u.flatten([W0_0.flatten(), W1_0.flatten()])
     Wf = tf.constant(W0f)
     assert Wf.dtype == tf.float32
     lr = tf.constant(0.2)
 
+    losses = []
     for step in range(40):
       loss, grad, kfac_grad = loss_and_grad(Wf)
-      print("Step %d loss %.2f"%(step, loss.numpy()))
+      loss0 = loss.numpy()
+      print("Step %d loss %.2f"%(step, loss0))
+      losses.append(loss0)
+      
       Wf-=lr*kfac_grad
       if step >= 4:
         assert loss < 17.6
@@ -138,6 +142,9 @@ def main():
 
 
   u.summarize_time()
+  assert losses[-1]<0.59
+  assert losses[-1]>0.57
+  assert 20e-3<min(u.global_time_list)<50e-3, "Time should be 30ms on 1080"
 
 if __name__=='__main__':
   main()
