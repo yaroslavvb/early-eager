@@ -35,6 +35,7 @@ d_nonlin = u.relu_mask
 #nonlin = tf.identity
 #def d_nonlin(y): return y
 def nonlin(x): return x
+def d_nonlin(x): return 1
 
 
 identity_cache = {}
@@ -72,24 +73,24 @@ def loss_and_output_and_grad(Wf):
   A[1] = W[0]
   for i in range(1, n+1):
     A[i+1] = nonlin(W[i] @ A[i])
-    #    print(A[i+1])
-  err = (A[3] - A[1])
+#    print(A[i+1])
+#    #    print(A[i+1])
+  err = (A[n+1] - A[1])
 
   B = [None]*(n+1)
   B2 = [None]*(n+1)
   B[n] = err*d_nonlin(A[n+1])
   #  sampled_labels = tf.random_normal((f(n), f(-1)), dtype=dtype, seed=0)
   sampled_labels = tf.constant(np.random.normal(size=f(n)*f(-1)).astype(dtype).reshape((f(n), f(-1))))
-  #  print('sampled labels', sampled_labels)
+#  #  print('sampled labels', sampled_labels)
   B2[n] = sampled_labels*d_nonlin(A[n+1])
+#  print(B[n])
   for i in range(n-1, -1, -1):
     backprop = t(W[i+1]) @ B[i+1]
     backprop2 = t(W[i+1]) @ B2[i+1]
     B[i] = backprop*d_nonlin(A[i+1])
     B2[i] = backprop2*d_nonlin(A[i+1])
-    #    print(B[i])
-
-
+#    #    print(B[i])
 
   dW = [None]*(n+1)
   pre_dW = [None]*(n+1)  # preconditioned dW
@@ -116,13 +117,10 @@ def loss_and_output_and_grad(Wf):
     pre_dW[i] = (whitened_B @ t(whitened_A[i]))/dsize
     dW[i] = (B[i] @ t(A[i]))/dsize
 
-  reconstruction = u.L2(err) / (2 * dsize)
-  #reconstruction = tf.reduce_mean(tf.square(err))*28*28/2
-  loss = reconstruction
-
+  loss = u.L2(err)/2/dsize
   grad = u.flatten(dW[1:])
   kfac_grad = u.flatten(pre_dW[1:])
-  return loss, A[3], grad, kfac_grad
+  return loss, A[n+1], grad, kfac_grad
 
 def main():
   global fs, X, n, f, dsize, lambda_
@@ -133,23 +131,23 @@ def main():
   lambda_=3e-3
   lr = 0.2
   dsize = 2
-  fs = [dsize, 2, 2, 2]  # layer sizes
+  fs = [dsize, 2, 2]  # layer sizes
   def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
   n = len(fs) - 2
   train_images = np.asarray([[0, 1], [2, 3]]).astype(dtype)
   X = tf.constant(train_images[:,:dsize].astype(dtype))
 
 
-  # transpose because flatten does column-wise vectorization
-  W0_0 = np.asarray([[0., 1], [2, 3]]).astype(dtype).T/10
-  W1_0 = np.asarray([[4., 5], [6, 7]]).astype(dtype).T/10
-  W0f = u.flatten([W0_0.flatten(), W1_0.flatten()])
+  W0_0 = np.asarray([[0., 1], [2, 3]]).astype(dtype)/10
+  #  W1_0 = np.asarray([[4., 5], [6, 7]]).astype(dtype)/10
+  #  W0f = u.flatten([W0_0, W1_0])
+  W0f = u.flatten([W0_0])
   Wf = tf.constant(W0f)
-  assert Wf.dtype == tf.float32
 
   losses = []
-  for step in range(10):
+  for step in range(2):
     loss, output, grad, kfac_grad = loss_and_output_and_grad(Wf)
+#    print('grad',grad)
     loss0 = loss.numpy()
     print("Step %3d loss %10.9f"%(step, loss0))
     losses.append(loss0)
@@ -158,9 +156,10 @@ def main():
     Wf-=lr*grad
     u.record_time()
 
-
   u.summarize_time()
-  assert losses[-1]<1.65619   # for gradient
+  target = 0.275399953
+
+  assert abs(loss0-target)<1e-5, abs(loss0-target)
 
 if __name__=='__main__':
   main()
