@@ -78,7 +78,7 @@ def main():
   model = Net()
   model.train()
   optimizer = optim.SGD(model.parameters(), lr=lr)
-  for step in range(1):
+  for step in range(2):
     optimizer.zero_grad()
     forward_list = []
     output = model(data)
@@ -93,11 +93,14 @@ def main():
     print('grad', model.W0.grad)
     desired_result = np.array([[ -1.4,  -3.4], [ -3.8, -17. ]],
                               dtype=dtype)
-    np.testing.assert_allclose(model.W0.grad.data.numpy(), desired_result)
+    #
+    #np.testing.assert_allclose(model.W0.grad.data.numpy(), desired_result)
     optimizer.step()
     
     print("Step %3d loss %10.9f"%(step, loss0))
-    
+
+  assert loss0-116.301605225<1e-9
+
 
 if __name__=='__main__':
   main()

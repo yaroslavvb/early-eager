@@ -15,7 +15,7 @@ tfe.enable_eager_execution()
 dtype = np.float32
 
 def nonlin(x): return x
-def d_nonlin(x): return x
+def d_nonlin(x): return 1
 
 def loss_and_grad(Wf):
   """Returns cost, gradient for current parameter vector."""
@@ -26,31 +26,23 @@ def loss_and_grad(Wf):
 
   A = [None]*(n+2)
   A[1] = W[0]
-  #  print('A[1]', A[1])
   for i in range(1, n+1):
     A[i+1] = nonlin(W[i] @ A[i])
-    #    print('i+1', A[i+1])
   err = (A[n+1] - A[1])
-  #  print('err', err)
 
   B = [None]*(n+1)
-  B[n] = err*d_nonlin(A[n+1])
-#  print('B[n]', B[n])
+
+  B[n] = 2*err*d_nonlin(A[n+1])
   for i in range(n-1, -1, -1):
     backprop = t(W[i+1]) @ B[i+1]
     B[i] = backprop*d_nonlin(A[i+1])
-    #    print('B[i]', B[i])
 
   dW = [None]*(n+1)
     
   for i in range(1,n+1):
     dW[i] = (B[i] @ t(A[i]))
-    print('grad in', B[i])
-    print('grad out', (B[i] @ t(A[i])))
 
   loss = u.L2(err)
-
-  print('dW', dW)
   grad = u.flatten(dW[1:])
   return loss, grad
 
@@ -69,7 +61,6 @@ def main():
   X = tf.constant(train_images[:,:dsize].astype(dtype))
 
 
-  # transpose because flatten does column-wise vectorization
   W0_0 = np.asarray([[0., 1], [2, 3]]).astype(dtype)/10
   #  W1_0 = np.asarray([[4., 5], [6, 7]]).astype(dtype).T/10
   #  W0f = u.flatten([W0_0, W1_0])
@@ -83,8 +74,9 @@ def main():
     loss0 = loss.numpy()
     print("Step %3d loss %10.9f"%(step, loss0))
     losses.append(loss0)
-
     Wf-=lr*grad
+
+  assert losses[-1]-116.301605225<1e-9
 
 if __name__=='__main__':
   main()
