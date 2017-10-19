@@ -16,6 +16,13 @@ import common_gd
 args = common_gd.args
 args.cuda = not args.no_cuda and tfe.num_gpus()>0
 
+# for line profiling
+try:
+  profile  # throws an exception when profile isn't defined
+except NameError:
+  profile = lambda x: x   # if it's not defined simply ignore the decorator.
+
+
 train_images = u.get_mnist_images()
 dsize = 10000
 fs = [dsize, 28*28, 196, 28*28]  # layer sizes
@@ -23,12 +30,6 @@ lambda_=3e-3
 def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
 n = len(fs) - 2
 
-
-# for line profiling
-try:
-  profile  # throws an exception when profile isn't defined
-except NameError:
-  profile = lambda x: x   # if it's not defined simply ignore the decorator.
 
 dtype = np.float32
 tf_dtype = tf.float32
@@ -116,6 +117,7 @@ def loss_and_grad(Wf):
   kfac_grad = u.flatten(pre_dW[1:])
   return loss, grad, kfac_grad
 
+@profile
 def main():
   global fs, X, n, f, dsize, lambda_
   
