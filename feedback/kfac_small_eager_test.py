@@ -123,7 +123,7 @@ def main():
 
     W0_0 = u.ng_init(fs[2],fs[3])
     W1_0 = u.ng_init(fs[3], fs[2])
-    W0f = u.flatten([W0_0.flatten(), W1_0.flatten()])
+    W0f = u.flatten([W0_0, W1_0])
     Wf = tf.constant(W0f)
     assert Wf.dtype == tf.float32
     lr = tf.constant(0.2)
