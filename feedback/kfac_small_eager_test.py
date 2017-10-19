@@ -12,6 +12,17 @@ import time
 from tensorflow.contrib.eager.python import tfe
 tfe.enable_eager_execution()
 
+import common_gd
+args = common_gd.args
+args.cuda = not args.no_cuda and tfe.num_gpus()>0
+
+train_images = u.get_mnist_images()
+dsize = 10000
+fs = [dsize, 28*28, 196, 28*28]  # layer sizes
+lambda_=3e-3
+def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
+n = len(fs) - 2
+
 
 # for line profiling
 try:
@@ -108,22 +119,16 @@ def loss_and_grad(Wf):
 def main():
   global fs, X, n, f, dsize, lambda_
   
-  np.random.seed(0)
-  tf.set_random_seed(0)
+  np.random.seed(args.seed)
+  tf.set_random_seed(args.seed)
 
-  if tfe.num_gpus()>0:
+  if args.cuda:
     device = '/gpu:0'
   else:
     device = '/cpu:0'
   device_context = tf.device(device)
   device_context.__enter__()
 
-  train_images = u.get_mnist_images()
-  dsize = 10000
-  fs = [dsize, 28*28, 196, 28*28]  # layer sizes
-  lambda_=3e-3
-  def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
-  n = len(fs) - 2
   X = tf.constant(train_images[:,:dsize].astype(dtype))
 
 
@@ -138,7 +143,7 @@ def main():
   for step in range(40):
     loss, grad, kfac_grad = loss_and_grad(Wf)
     loss0 = loss.numpy()
-    print("Step %d loss %.2f"%(step, loss0))
+    print("Step %3d loss %10.9f"%(step, loss0))
     losses.append(loss0)
 
     Wf-=lr*kfac_grad
