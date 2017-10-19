@@ -1,5 +1,3 @@
-# requirements: MKL, scipy, gzip
-
 import util as u
 from util import t
 u.check_mkl()
@@ -11,7 +9,6 @@ import time
 
 from tensorflow.contrib.eager.python import tfe
 tfe.enable_eager_execution()
-
 
 # for line profiling
 try:
@@ -25,24 +22,12 @@ args.cuda = not args.no_cuda and (tfe.num_gpus() > 0)
 
 dtype = np.float32
 tf_dtype = tf.float32
-
 lambda_=3e-3
 lr = 0.2
 dsize = 2
-fs = [dsize, 2, 2]  # layer sizes
-
-
+fs = [dsize, 2, 2, 2]  # layer sizes
 nonlin = tf.nn.sigmoid
 def d_nonlin(y): return y*(1-y)
-
-nonlin = tf.nn.relu
-d_nonlin = u.relu_mask
-
-#nonlin = tf.identity
-#def d_nonlin(y): return y
-def nonlin(x): return x
-def d_nonlin(x): return 1
-
 
 identity_cache = {}
 def Identity(n):
@@ -87,13 +72,8 @@ def loss_and_output_and_grad(Wf):
   B2 = [None]*(n+1)
   B[n] = err*d_nonlin(A[n+1])
   #  sampled_labels = tf.random_normal((f(n), f(-1)), dtype=dtype, seed=0)
-  sampled_labels = tf.constant(np.random.randn(*err.shape).astype(dtype))
-  noise = sampled_labels
-  fake_data = A[1]+noise
-#  print("fake_data", fake_data)
-#  print("noise", noise)
-#  #  print('sampled labels', sampled_labels)
-  B2[n] = (sampled_labels)*d_nonlin(A[n+1])
+  noise = tf.constant(np.random.randn(*err.shape).astype(dtype))
+  B2[n] = noise*d_nonlin(A[n+1])
 #  print("B2[n]", B2[n])
 #  print(B[n])
   for i in range(n-1, -1, -1):
@@ -128,10 +108,8 @@ def loss_and_output_and_grad(Wf):
     cov_B[i] = B[i]@t(B[i])/dsize
     whitened_B = B[i] #regularized_inverse(cov_B2[i]) @ B[i]
     whitened_B = regularized_inverse(cov_B2[i]) @ B[i]
-    #    print('whitenedA', whitened_A[i])
     pre_dW[i] = (whitened_B @ t(whitened_A[i]))/dsize
     dW[i] = (B[i] @ t(A[i]))/dsize
-#    print('grad', pre_dW[i])
 
   loss = u.L2(err)/2/dsize
   grad = u.flatten(dW[1:])
@@ -151,9 +129,8 @@ def main():
 
 
   W0_0 = np.asarray([[0., 1], [2, 3]]).astype(dtype)/10
-  #  W1_0 = np.asarray([[4., 5], [6, 7]]).astype(dtype)/10
-  #  W0f = u.flatten([W0_0, W1_0])
-  W0f = u.flatten([W0_0])
+  W1_0 = np.asarray([[4., 5], [6, 7]]).astype(dtype)/10
+  W0f = u.flatten([W0_0, W1_0])
   Wf = tf.constant(W0f)
 
   losses = []
@@ -165,12 +142,11 @@ def main():
     losses.append(loss0)
 
     Wf-=lr*kfac_grad
-    #Wf-=lr*grad
     u.record_time()
 
   u.summarize_time()
-  target = 51.863979340
-  assert abs(loss0-target)<1e-5, abs(loss0-target)
+  target = 1.251557469
+  assert abs(loss0-target)<1e-9, abs(loss0-target)
 
 if __name__=='__main__':
   main()

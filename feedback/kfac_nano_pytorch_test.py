@@ -1,4 +1,5 @@
 import util as u
+u.check_mkl()
 
 import torch
 import torch.nn as nn
@@ -15,9 +16,11 @@ args = common_gd.args
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
 dtype = np.float32
+lambda_=3e-3
+lr = 0.2
+dsize = 2 # 1000
 nonlin = torch.sigmoid
-nonlin = F.relu
-nonlin = lambda x: x
+
 DO_PRINT = False
 
 def _get_output(ctx, arg, inplace=False):
@@ -29,9 +32,6 @@ def _get_output(ctx, arg, inplace=False):
 
 forward_list = []
 backward_list = []
-lambda_=3e-3
-lr = 0.2
-dsize = 2 # 1000
 
 class Addmm(Function):
         
@@ -92,30 +92,24 @@ def main():
   np.random.seed(args.seed)
   if args.cuda:
     torch.cuda.manual_seed(args.seed)
-  # images = torch.Tensor(u.get_mnist_images())
-  # images = images[:dsize]
-  # if args.cuda:
-  #   images = images.cuda()
   data0 = np.array([[0., 1], [2, 3]]).astype(dtype)
   data = Variable(torch.from_numpy(data0))
 
   class Net(nn.Module):
     def __init__(self):
       super(Net, self).__init__()
-      W0 = (np.array([[0., 1], [2, 3]])/10).astype(dtype)
-      #      W1 = (np.array([[4., 5], [6, 7]])/10).astype(dtype)
+      W0 = (np.array([[0., 1], [2, 3]])).astype(dtype)/10
+      W1 = (np.array([[4., 5], [6, 7]])).astype(dtype)/10
       self.W0 = nn.Parameter(torch.from_numpy(W0))
-      #      self.W1 = nn.Parameter(torch.from_numpy(W1))
+      self.W1 = nn.Parameter(torch.from_numpy(W1))
 
     def forward(self, input):
       x = input.view(-1, 2)
       x = nonlin(my_matmul(self.W0, x))
-      #      x = nonlin(my_matmul(self.W1, x))
+      x = nonlin(my_matmul(self.W1, x))
       return x.view_as(input)
 
-  # initialize model and weights
   model = Net()
-#  params1, params2 = list(model.parameters())
   if args.cuda:
     model.cuda()
   
@@ -129,42 +123,36 @@ def main():
     output = model(data)
     err = output-data
     loss = torch.sum(err*err)/2/dsize
-    loss.backward()#retain_graph=True)
+    loss.backward(retain_graph=True)
     loss0 = loss.data[0]
-    optimizer.zero_grad()
 
-    A_list = copy_list(forward_list)
-    B_list = copy_list(backward_list[::-1])
+    A = forward_list[:]
+    B = backward_list[::-1]
     forward_list = []
     backward_list = []
     
     noise = torch.from_numpy(np.random.randn(*data.data.shape).astype(dtype))
-    fake_data = Variable(output.data+noise)
-    output = model(data)
-    err2 = output - fake_data
+    synthetic_data = Variable(output.data+noise)
+    err2 = output - synthetic_data
     loss2 = torch.sum(err2*err2)/2/dsize
     optimizer.zero_grad()
+    backward_list = []
     loss2.backward()
-    B2_list = copy_list(backward_list[::-1])
+    B2 = backward_list[::-1]
 
 
     # compute whitened gradient
     pre_dW = []
-    n = len(A_list)
-    assert len(B_list) == n
-    assert len(B2_list) == n
-    assert n == 1
+    n = len(A)
+    assert len(B) == n
+    assert len(B2) == n
     for i in range(n):
-      A = A_list[i]
-      B = B_list[i]
-      B2 = B2_list[i]
-      covA = A @ t(A)/dsize
-      covB2 = B2@t(B2)/dsize
-      covB = B@t(B)/dsize
+      covA = A[i] @ t(A[i])/dsize
+      covB2 = B2[i]@t(B2[i])/dsize
+      covB = B[i]@t(B[i])/dsize
       covA_inv = regularized_inverse(covA)
-      whitened_A = regularized_inverse(covA)@A
-      whitened_B = B.data
-      whitened_B = regularized_inverse(covB2.data)@B.data
+      whitened_A = regularized_inverse(covA)@A[i]
+      whitened_B = regularized_inverse(covB2.data)@B[i].data
       pre_dW.append(whitened_B @ t(whitened_A)/dsize)
 
     params = list(model.parameters())
@@ -175,7 +163,7 @@ def main():
     print("Step %3d loss %10.9f"%(step, loss0))
     u.record_time()
 
-  target = 51.861900330
+  target = 1.251557469
   assert abs(loss0-target)<1e-9, abs(loss0-target)
   u.summarize_time()
     
