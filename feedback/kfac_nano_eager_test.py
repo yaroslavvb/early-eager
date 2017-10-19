@@ -26,6 +26,12 @@ args.cuda = not args.no_cuda and (tfe.num_gpus() > 0)
 dtype = np.float32
 tf_dtype = tf.float32
 
+lambda_=3e-3
+lr = 0.2
+dsize = 2
+fs = [dsize, 2, 2]  # layer sizes
+
+
 nonlin = tf.nn.sigmoid
 def d_nonlin(y): return y*(1-y)
 
@@ -51,7 +57,7 @@ def Identity(n):
     identity_cache[n] = val
   return identity_cache[n]
 
-def regularized_inverse(mat, lambda_):
+def regularized_inverse(mat):
   n = int(mat.shape[0])
   assert n == int(mat.shape[1])
   regmat = mat + lambda_*Identity(n)
@@ -81,7 +87,10 @@ def loss_and_output_and_grad(Wf):
   B2 = [None]*(n+1)
   B[n] = err*d_nonlin(A[n+1])
   #  sampled_labels = tf.random_normal((f(n), f(-1)), dtype=dtype, seed=0)
-  sampled_labels = tf.constant(np.random.normal(size=f(n)*f(-1)).astype(dtype).reshape((f(n), f(-1))))
+  sampled_labels = tf.constant(np.random.random(err.shape).astype(dtype))
+  noise = sampled_labels
+  fake_data = A[1]+noise
+  print("fake_data", fake_data)
 #  #  print('sampled labels', sampled_labels)
   B2[n] = sampled_labels*d_nonlin(A[n+1])
 #  print(B[n])
@@ -103,23 +112,25 @@ def loss_and_output_and_grad(Wf):
 
   if global_cov_A is None:
     global_cov_A = A[1]@t(A[1])/dsize
-    global_whitened_A = regularized_inverse(global_cov_A, lambda_) @ A[1]
-    
+    global_whitened_A = regularized_inverse(global_cov_A) @ A[1]
+
   cov_A[1] = global_cov_A
   whitened_A[1] = global_whitened_A
     
   for i in range(1,n+1):
     if i > 1:
       cov_A[i] = A[i]@t(A[i])/dsize
-      whitened_A[i] = regularized_inverse(cov_A[i], lambda_) @ A[i]
+      whitened_A[i] = regularized_inverse(cov_A[i]) @ A[i]
     cov_B2[i] = B2[i]@t(B2[i])/dsize
-    whitened_B = regularized_inverse(cov_B2[i], lambda_) @ B[i]
+    whitened_B = B[i] #regularized_inverse(cov_B2[i]) @ B[i]
+    #    print('whitenedA', whitened_A[i])
     pre_dW[i] = (whitened_B @ t(whitened_A[i]))/dsize
     dW[i] = (B[i] @ t(A[i]))/dsize
 
   loss = u.L2(err)/2/dsize
   grad = u.flatten(dW[1:])
   kfac_grad = u.flatten(pre_dW[1:])
+  print('grad', kfac_grad)
   return loss, A[n+1], grad, kfac_grad
 
 def main():
@@ -128,10 +139,6 @@ def main():
   np.random.seed(args.seed)
   tf.set_random_seed(args.seed)
   
-  lambda_=3e-3
-  lr = 0.2
-  dsize = 2
-  fs = [dsize, 2, 2]  # layer sizes
   def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
   n = len(fs) - 2
   train_images = np.asarray([[0, 1], [2, 3]]).astype(dtype)
@@ -145,15 +152,15 @@ def main():
   Wf = tf.constant(W0f)
 
   losses = []
-  for step in range(2):
+  for step in range(1):
     loss, output, grad, kfac_grad = loss_and_output_and_grad(Wf)
-#    print('grad',grad)
+    #print(u.unflatten(kfac_grad, [2, 2]))
     loss0 = loss.numpy()
     print("Step %3d loss %10.9f"%(step, loss0))
     losses.append(loss0)
 
-    #Wf-=lr*kfac_grad
-    Wf-=lr*grad
+    Wf-=lr*kfac_grad
+    #Wf-=lr*grad
     u.record_time()
 
   u.summarize_time()
