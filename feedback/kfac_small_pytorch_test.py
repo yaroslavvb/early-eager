@@ -1,3 +1,6 @@
+# Times: min: 440.60, median: 452.39, mean: 453.87
+
+
 import util as u
 u.check_mkl()
 
@@ -18,7 +21,7 @@ args.cuda = not args.no_cuda and torch.cuda.is_available()
 dtype = np.float32
 lambda_=3e-3
 lr = 0.2
-dsize = 2 # 1000
+dsize = 10000
 nonlin = torch.sigmoid
 
 DO_PRINT = False
@@ -72,8 +75,16 @@ def my_matmul(mat1, mat2):
 
 def regularized_inverse(mat):
   assert mat.shape[0] == mat.shape[1]
-  regmat = mat + lambda_*torch.eye(mat.shape[0])
-  return torch.from_numpy(scipy.linalg.inv(regmat.numpy()))
+  ii = torch.eye(mat.shape[0])
+  if args.cuda:
+    ii = ii.cuda()
+  regmat = mat + lambda_*ii
+
+  result = torch.from_numpy(scipy.linalg.inv(regmat.cpu().numpy()))
+  if args.cuda:
+    result = result.cuda()
+    
+  return result
 
 
 def t(mat): return torch.transpose(mat, 0, 1)
@@ -92,19 +103,17 @@ def main():
   np.random.seed(args.seed)
   if args.cuda:
     torch.cuda.manual_seed(args.seed)
-  data0 = np.array([[0., 1], [2, 3]]).astype(dtype)
-  data = Variable(torch.from_numpy(data0))
 
   class Net(nn.Module):
     def __init__(self):
       super(Net, self).__init__()
-      W0 = (np.array([[0., 1], [2, 3]])).astype(dtype)/10
-      W1 = (np.array([[4., 5], [6, 7]])).astype(dtype)/10
+      W0 = u.ng_init(196, 784)
+      W1 = u.ng_init(784, 196)  # fix non-contiguous input
       self.W0 = nn.Parameter(torch.from_numpy(W0))
       self.W1 = nn.Parameter(torch.from_numpy(W1))
 
     def forward(self, input):
-      x = input.view(-1, 2)
+      x = input.view(784, -1)
       x = nonlin(my_matmul(self.W0, x))
       x = nonlin(my_matmul(self.W1, x))
       return x.view_as(input)
@@ -112,7 +121,13 @@ def main():
   model = Net()
   if args.cuda:
     model.cuda()
-  
+
+  data0 = u.get_mnist_images()
+  data0 = data0[:, :dsize].astype(dtype)
+  data = Variable(torch.from_numpy(np.copy(data0)).contiguous())
+  if args.cuda:
+    data = data.cuda()
+
   model.train()
   optimizer = optim.SGD(model.parameters(), lr=lr)
   losses = []
@@ -132,7 +147,12 @@ def main():
     backward_list = []
     
     noise = torch.from_numpy(np.random.randn(*data.data.shape).astype(dtype))
+    if args.cuda:
+      noise = noise.cuda()
     synthetic_data = Variable(output.data+noise)
+    if args.cuda:
+      synthetic_data = synthetic_data.cuda()
+      
     err2 = output - synthetic_data
     loss2 = torch.sum(err2*err2)/2/dsize
     optimizer.zero_grad()
@@ -163,9 +183,9 @@ def main():
     print("Step %3d loss %10.9f"%(step, loss0))
     u.record_time()
 
-  target = 1.251557469
-  assert abs(loss0-target)<1e-9, abs(loss0-target)
+  target = 2.360062122
   u.summarize_time()
+  assert abs(loss0-target)<1e-9, abs(loss0-target)
     
 
 if __name__=='__main__':

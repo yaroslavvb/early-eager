@@ -110,35 +110,41 @@ def main():
   
   np.random.seed(0)
   tf.set_random_seed(0)
-  
-  with tf.device('/gpu:0'):
-    train_images = u.get_mnist_images()
-    dsize = 10000
-    fs = [dsize, 28*28, 196, 28*28]  # layer sizes
-    lambda_=3e-3
-    def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
-    n = len(fs) - 2
-    X = tf.constant(train_images[:,:dsize].astype(dtype))
+
+  if tfe.num_gpus()>0:
+    device = '/gpu:0'
+  else:
+    device = '/cpu:0'
+  device_context = tf.device(device)
+  device_context.__enter__()
+
+  train_images = u.get_mnist_images()
+  dsize = 10000
+  fs = [dsize, 28*28, 196, 28*28]  # layer sizes
+  lambda_=3e-3
+  def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
+  n = len(fs) - 2
+  X = tf.constant(train_images[:,:dsize].astype(dtype))
 
 
-    W0_0 = u.ng_init(fs[2],fs[3])
-    W1_0 = u.ng_init(fs[3], fs[2])
-    W0f = u.flatten([W0_0, W1_0])
-    Wf = tf.constant(W0f)
-    assert Wf.dtype == tf.float32
-    lr = tf.constant(0.2)
+  W0_0 = u.ng_init(fs[2],fs[3])
+  W1_0 = u.ng_init(fs[3], fs[2])
+  W0f = u.flatten([W0_0, W1_0])
+  Wf = tf.constant(W0f)
+  assert Wf.dtype == tf.float32
+  lr = tf.constant(0.2)
 
-    losses = []
-    for step in range(40):
-      loss, grad, kfac_grad = loss_and_grad(Wf)
-      loss0 = loss.numpy()
-      print("Step %d loss %.2f"%(step, loss0))
-      losses.append(loss0)
-      
-      Wf-=lr*kfac_grad
-      if step >= 4:
-        assert loss < 17.6
-      u.record_time()
+  losses = []
+  for step in range(40):
+    loss, grad, kfac_grad = loss_and_grad(Wf)
+    loss0 = loss.numpy()
+    print("Step %d loss %.2f"%(step, loss0))
+    losses.append(loss0)
+
+    Wf-=lr*kfac_grad
+    if step >= 4:
+      assert loss < 17.6
+    u.record_time()
 
 
   u.summarize_time()
