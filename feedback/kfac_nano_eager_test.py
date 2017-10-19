@@ -87,12 +87,14 @@ def loss_and_output_and_grad(Wf):
   B2 = [None]*(n+1)
   B[n] = err*d_nonlin(A[n+1])
   #  sampled_labels = tf.random_normal((f(n), f(-1)), dtype=dtype, seed=0)
-  sampled_labels = tf.constant(np.random.random(err.shape).astype(dtype))
+  sampled_labels = tf.constant(np.random.randn(*err.shape).astype(dtype))
   noise = sampled_labels
   fake_data = A[1]+noise
-  print("fake_data", fake_data)
+#  print("fake_data", fake_data)
+#  print("noise", noise)
 #  #  print('sampled labels', sampled_labels)
-  B2[n] = sampled_labels*d_nonlin(A[n+1])
+  B2[n] = (sampled_labels)*d_nonlin(A[n+1])
+#  print("B2[n]", B2[n])
 #  print(B[n])
   for i in range(n-1, -1, -1):
     backprop = t(W[i+1]) @ B[i+1]
@@ -107,6 +109,7 @@ def loss_and_output_and_grad(Wf):
   cov_A = [None]*(n+1)    # covariance of activations[i]
   whitened_A = [None]*(n+1)    # covariance of activations[i]
   cov_B2 = [None]*(n+1)   # covariance of synthetic backprops[i]
+  cov_B = [None]*(n+1)   # covariance of synthetic backprops[i]
   vars_svd_A = [None]*(n+1)
   vars_svd_B2 = [None]*(n+1)
 
@@ -122,15 +125,17 @@ def loss_and_output_and_grad(Wf):
       cov_A[i] = A[i]@t(A[i])/dsize
       whitened_A[i] = regularized_inverse(cov_A[i]) @ A[i]
     cov_B2[i] = B2[i]@t(B2[i])/dsize
+    cov_B[i] = B[i]@t(B[i])/dsize
     whitened_B = B[i] #regularized_inverse(cov_B2[i]) @ B[i]
+    whitened_B = regularized_inverse(cov_B2[i]) @ B[i]
     #    print('whitenedA', whitened_A[i])
     pre_dW[i] = (whitened_B @ t(whitened_A[i]))/dsize
     dW[i] = (B[i] @ t(A[i]))/dsize
+#    print('grad', pre_dW[i])
 
   loss = u.L2(err)/2/dsize
   grad = u.flatten(dW[1:])
   kfac_grad = u.flatten(pre_dW[1:])
-  print('grad', kfac_grad)
   return loss, A[n+1], grad, kfac_grad
 
 def main():
@@ -152,7 +157,7 @@ def main():
   Wf = tf.constant(W0f)
 
   losses = []
-  for step in range(1):
+  for step in range(10):
     loss, output, grad, kfac_grad = loss_and_output_and_grad(Wf)
     #print(u.unflatten(kfac_grad, [2, 2]))
     loss0 = loss.numpy()
@@ -164,8 +169,7 @@ def main():
     u.record_time()
 
   u.summarize_time()
-  target = 0.275399953
-
+  target = 51.863979340
   assert abs(loss0-target)<1e-5, abs(loss0-target)
 
 if __name__=='__main__':

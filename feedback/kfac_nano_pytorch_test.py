@@ -18,6 +18,7 @@ dtype = np.float32
 nonlin = torch.sigmoid
 nonlin = F.relu
 nonlin = lambda x: x
+DO_PRINT = False
 
 def _get_output(ctx, arg, inplace=False):
   if inplace:
@@ -53,13 +54,14 @@ class Addmm(Function):
     if ctx.needs_input_grad[2]:
       grad_matrix2 = torch.mm(matrix1.t(), grad_output)
 
-##    print("backward got")
-#    print("grad_output", grad_output)
-#    print("matrix1", matrix1)
-#    print('matrix2', matrix2)
-#    print('grad_matrix1', grad_matrix1)
+    if DO_PRINT:
+      print("backward got")
+      print("grad_output", grad_output)
+      print("matrix1", matrix1)
+      print('matrix2', matrix2)
+      print('grad_matrix1', grad_matrix1)
 
-    # insert dsize correction to put activations/backprops on same scale
+    # insert dsize correction to put activations/backprops on same scale      
     backward_list.append(grad_output*dsize)
     return None, grad_matrix1, grad_matrix2, None, None, None
 
@@ -84,7 +86,7 @@ def copy_list(l):
   return new_list
 
 def main():
-  global forward_list, backward_list
+  global forward_list, backward_list, DO_PRINT
   
   torch.manual_seed(args.seed)
   np.random.seed(args.seed)
@@ -120,60 +122,50 @@ def main():
   model.train()
   optimizer = optim.SGD(model.parameters(), lr=lr)
   losses = []
-  for step in range(1):
+  for step in range(10):
     optimizer.zero_grad()
     forward_list = []
     backward_list = []
     output = model(data)
     err = output-data
     loss = torch.sum(err*err)/2/dsize
-    loss.backward(retain_graph=True)
+    loss.backward()#retain_graph=True)
     loss0 = loss.data[0]
+    optimizer.zero_grad()
 
     A_list = copy_list(forward_list)
     B_list = copy_list(backward_list[::-1])
     forward_list = []
     backward_list = []
     
-    noise = torch.from_numpy(np.random.random(data.data.shape).astype(dtype))
-    fake_data = Variable(data.data+noise)
+    noise = torch.from_numpy(np.random.randn(*data.data.shape).astype(dtype))
+    fake_data = Variable(output.data+noise)
+    output = model(data)
     err2 = output - fake_data
     loss2 = torch.sum(err2*err2)/2/dsize
     optimizer.zero_grad()
     loss2.backward()
     B2_list = copy_list(backward_list[::-1])
 
-#    print("forwards")
-#    print(forward_list)
-#    print('backwards')
-#    print(backward_list)
-#    print('grads')
-#    print(model.W0.grad.data)
 
     # compute whitened gradient
     pre_dW = []
     n = len(A_list)
     assert len(B_list) == n
-#    assert len(B2_list) == n
+    assert len(B2_list) == n
     assert n == 1
     for i in range(n):
       A = A_list[i]
       B = B_list[i]
       B2 = B2_list[i]
-#      B2 = B2_list[i]
       covA = A @ t(A)/dsize
       covB2 = B2@t(B2)/dsize
+      covB = B@t(B)/dsize
       covA_inv = regularized_inverse(covA)
       whitened_A = regularized_inverse(covA)@A
-      whitened_B = regularized_inverse(covB2.data)@B.data
       whitened_B = B.data
-      #      print('whitenedA', whitened_A)
+      whitened_B = regularized_inverse(covB2.data)@B.data
       pre_dW.append(whitened_B @ t(whitened_A)/dsize)
-      print('grad', pre_dW)
-      #      print('A', A)
-      #      print('B', B)
-      #      print('dW', pre_dW)
-      
 
     params = list(model.parameters())
     assert len(params) == len(pre_dW)
@@ -183,8 +175,8 @@ def main():
     print("Step %3d loss %10.9f"%(step, loss0))
     u.record_time()
 
-  target = 0.275399953
-  assert abs(loss0-target)<1e-5, abs(loss0-target)
+  target = 51.861900330
+  assert abs(loss0-target)<1e-9, abs(loss0-target)
   u.summarize_time()
     
 
