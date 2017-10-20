@@ -1,143 +1,95 @@
-# requirements: MKL, scipy, gzip
-
-import util as u
-from util import t
-u.check_mkl()
-
 import numpy as np
-import scipy
 import tensorflow as tf
-import time
-
+import scipy
 from tensorflow.contrib.eager.python import tfe
 tfe.enable_eager_execution()
 
 
-# for line profiling
-try:
-  profile  # throws an exception when profile isn't defined
-except NameError:
-  profile = lambda x: x   # if it's not defined simply ignore the decorator.
-
-dtype = np.float32
-tf_dtype = tf.float32
-
-
-identity_cache = {}
-def Identity(n):
-  """Identity matrix of size n."""
-  global identity_cache
-  if n in identity_cache:
-    return identity_cache[n]
-  else:
-    with tf.device('/cpu:0'):
-      val = tf.diag(tf.ones((n,), dtype=dtype))
-    val = tf.identity(val)   # move to current device
-    identity_cache[n] = val
-  return identity_cache[n]
-
-def regularized_inverse(mat, lambda_):
-  n = int(mat.shape[0])
-  assert n == int(mat.shape[1])
-  regmat = mat + lambda_*Identity(n)
-  return tf.constant(scipy.linalg.inv(regmat.numpy()))
-
-
-global_cov_A = None
-global_whitened_A = None
-@profile
-def loss_and_grad(Wf):
-  """Returns cost, gradient for current parameter vector."""
-  global fs, X, global_cov_A, global_whitened_A
-  
-  W = u.unflatten(Wf, fs[1:])   # perftodo: this creates transposes
-  W.insert(0, X)
-
-  A = [None]*(n+2)
-  A[1] = W[0]
-  for i in range(1, n+1):
-    A[i+1] = tf.sigmoid(W[i] @ A[i])
-  err = (A[3] - A[1])
-
-  def d_sigmoid(y):
-    return y*(1-y)
-
-  B = [None]*(n+1)
-  B2 = [None]*(n+1)
-  B[n] = err*d_sigmoid(A[n+1])
-  sampled_labels = tf.random_normal((f(n), f(-1)), dtype=dtype, seed=0)
-  B2[n] = sampled_labels*d_sigmoid(A[n+1])
-  for i in range(n-1, -1, -1):
-    backprop = t(W[i+1]) @ B[i+1]
-    backprop2 = t(W[i+1]) @ B2[i+1]
-    B[i] = backprop*d_sigmoid(A[i+1])
-    B2[i] = backprop2*d_sigmoid(A[i+1])
-
-  dW = [None]*(n+1)
-  pre_dW = [None]*(n+1)  # preconditioned dW
-
-  cov_A = [None]*(n+1)    # covariance of activations[i]
-  whitened_A = [None]*(n+1)    # covariance of activations[i]
-  cov_B2 = [None]*(n+1)   # covariance of synthetic backprops[i]
-  vars_svd_A = [None]*(n+1)
-  vars_svd_B2 = [None]*(n+1)
-
-  if global_cov_A is None:
-    global_cov_A = A[1]@t(A[1])/dsize
-    global_whitened_A = regularized_inverse(global_cov_A, lambda_) @ A[1]
-    
-  cov_A[1] = global_cov_A
-  whitened_A[1] = global_whitened_A
-    
-  for i in range(1,n+1):
-    if i > 1:
-      cov_A[i] = A[i]@t(A[i])/dsize
-      whitened_A[i] = regularized_inverse(cov_A[i], lambda_) @ A[i]
-    cov_B2[i] = B2[i]@t(B2[i])/dsize
-    whitened_B = regularized_inverse(cov_B2[i], lambda_) @ B[i]
-    pre_dW[i] = (whitened_B @ t(whitened_A[i]))/dsize
-    dW[i] = (B[i] @ t(A[i]))/dsize
-
-  reconstruction = u.L2(err) / (2 * dsize)
-  loss = reconstruction
-
-  grad = u.flatten(dW[1:])
-  kfac_grad = u.flatten(pre_dW[1:])
-  return loss, grad, kfac_grad
-
 def main():
-  global fs, X, n, f, dsize, lambda_
+  np.random.seed(1)
+  tf.set_random_seed(2)
   
-  np.random.seed(0)
-  tf.set_random_seed(0)
+  dtype = np.float32
+  lambda_=3e-3
+  lr = 0.2
+  dsize = 2
+
+  def t(mat): return tf.transpose(mat)
+
+  def regularized_inverse(mat):
+    n = int(mat.shape[0])
+    return tf.linalg.inv(mat + lambda_*tf.eye(n, dtype=dtype))
+
+  train_images = np.asarray([[0, 1], [2, 3]])
+  X = tf.constant(train_images[:,:dsize].astype(dtype))
+
+  W1_0 = np.asarray([[0., 1], [2, 3]]).astype(dtype)/10
+  W2_0 = np.asarray([[4., 5], [6, 7]]).astype(dtype)/10
+  W1 = tfe.Variable(W1_0, name='W1')
+  W2 = tfe.Variable(W2_0, name='W2')
+
+  forward = []
+  backward = []
+  forward_inv = []
+  backward_inv = []
+  @tfe.custom_gradient
+  def capturing_matmul(W, A):
+    forward.append(A)
+    def grad(B):
+      backward.append(B)
+      return [B @ tf.transpose(A), tf.transpose(W) @ B]
+    return W @ A, grad
+
+  @tfe.custom_gradient
+  def kfac_matmul(W, A):
+    def grad(B):
+      kfac_A = forward_inv.pop() @ A
+      kfac_B = backward_inv.pop() @ B
+      return [kfac_B @ tf.transpose(kfac_A), tf.transpose(W) @ B]
+    return W @ A, grad
+
+  matmul = tf.matmul
+  def loss_fn(synthetic=False):
+    x = tf.nn.sigmoid(matmul(W1, X))
+    x = tf.nn.sigmoid(matmul(W2, x))
+    if synthetic:
+      noise = tf.random_normal(X.shape)
+      target = tf.constant((x + noise).numpy())
+    else:
+      target = X
+    err = target-x
+    loss = tf.reduce_sum(err*err)/2/dsize
+    return loss
   
-  with tf.device('/gpu:0'):
-    train_images = u.get_mnist_images()
-    dsize = 10000
-    fs = [dsize, 28*28, 196, 28*28]  # layer sizes
-    lambda_=3e-3
-    def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
-    n = len(fs) - 2
-    X = tf.constant(train_images[:,:dsize].astype(dtype))
+  loss_and_grads = tfe.implicit_value_and_gradients(loss_fn)
+  optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr)
+  for step in range(10):
+    del backward[:]
+    del forward[:]
+    del forward_inv[:]
+    del backward_inv[:]
 
+    matmul = capturing_matmul
+    loss, grads_and_vars = loss_and_grads(True)
+    backward.reverse()
 
-    W0_0 = u.ng_init(fs[2],fs[3])
-    W1_0 = u.ng_init(fs[3], fs[2])
-    W0f = np.concatenate([W0_0.flatten(), W1_0.flatten()])
-    Wf = tf.constant(W0f)
-    assert Wf.dtype == tf.float32
-    lr = tf.constant(0.2)
+    for i in range(len(backward)):
+      backward[i] = backward[i]*dsize
+      
+    def cov(X): return X @ t(X)/dsize
+    def invcov(X): return regularized_inverse(cov(X))
+      
+    for i in range(2):
+      forward_inv.append(invcov(forward[i]))
+      backward_inv.append(invcov(backward[i]))
 
-    for step in range(40):
-      loss, grad, kfac_grad = loss_and_grad(Wf)
-      print("Step %d loss %.2f"%(step, loss.numpy()))
-      Wf-=lr*kfac_grad
-      if step >= 4:
-        assert loss < 17.6
-      u.record_time()
+    matmul = kfac_matmul
+    loss, grads_and_vars = loss_and_grads()
+    print("Step %3d loss %10.9f"%(step, loss.numpy()))
+    optimizer.apply_gradients(grads_and_vars)
 
-
-  u.summarize_time()
+  target = 1.251444697  # with proper random sampling
+  assert abs(loss.numpy()-target)<1e-9, abs(loss.numpy()-target)
 
 if __name__=='__main__':
   main()

@@ -2,6 +2,8 @@ import util as u
 from util import t
 u.check_mkl()
 
+SYNTHETIC_LABELS = True
+
 import numpy as np
 import scipy
 import tensorflow as tf
@@ -21,17 +23,15 @@ args = common_gd.args
 args.cuda = not args.no_cuda and (tfe.num_gpus() > 0)
 
 dtype = np.float32
-tf_dtype = tf.float32
+#tf_dtype = tf.float32
 lambda_=3e-3
 lr = 0.2
 dsize = 2
 fs = [dsize, 2, 2, 2]  # layer sizes
 
-nonlin = tf.identity
-def d_nonlin(y): return 1
-
 nonlin = tf.nn.sigmoid
 def d_nonlin(y): return y*(1-y)
+
 
 identity_cache = {}
 def Identity(n):
@@ -76,7 +76,11 @@ def loss_and_output_and_grad(Wf):
   B2 = [None]*(n+1)
   B[n] = err*d_nonlin(A[n+1])
   #  sampled_labels = tf.random_normal((f(n), f(-1)), dtype=dtype, seed=0)
+
+  #  print('random')
+  #  print(np.random.randn(*X.shape).astype(dtype))
   noise = tf.constant(np.random.randn(*err.shape).astype(dtype))
+#  print(noise)
   B2[n] = noise*d_nonlin(A[n+1])
 #  print("B2[n]", B2[n])
 #  print(B[n])
@@ -85,7 +89,6 @@ def loss_and_output_and_grad(Wf):
     backprop2 = t(W[i+1]) @ B2[i+1]
     B[i] = backprop*d_nonlin(A[i+1])
     B2[i] = backprop2*d_nonlin(A[i+1])
-#    #    print(B[i])
 
   dW = [None]*(n+1)
   pre_dW = [None]*(n+1)  # preconditioned dW
@@ -110,8 +113,10 @@ def loss_and_output_and_grad(Wf):
       whitened_A[i] = regularized_inverse(cov_A[i]) @ A[i]
     cov_B2[i] = B2[i]@t(B2[i])/dsize
     cov_B[i] = B[i]@t(B[i])/dsize
-    whitened_B = regularized_inverse(cov_B2[i]) @ B[i]
-    whitened_B = regularized_inverse(cov_B[i]) @ B[i]
+    if SYNTHETIC_LABELS:
+      whitened_B = regularized_inverse(cov_B2[i]) @ B[i]
+    else:
+      whitened_B = regularized_inverse(cov_B[i]) @ B[i]
 
     #regularized_inverse(cov_B[i])
     #    print("A", i, cov_A[i], regularized_inverse(cov_A[i]))
@@ -132,8 +137,8 @@ def loss_and_output_and_grad(Wf):
 def main():
   global fs, X, n, f, dsize, lambda_
   
-  np.random.seed(args.seed)
-  tf.set_random_seed(args.seed)
+  np.random.seed(1)
+  tf.set_random_seed(1)
   
   def f(i): return fs[i+1]  # W[i] has shape f[i] x f[i-1]
   n = len(fs) - 2
@@ -149,7 +154,6 @@ def main():
   losses = []
   for step in range(10):
     loss, output, grad, kfac_grad = loss_and_output_and_grad(Wf)
-    #print(u.unflatten(kfac_grad, [2, 2]))
     loss0 = loss.numpy()
     print("Step %3d loss %10.9f"%(step, loss0))
     losses.append(loss0)
@@ -158,8 +162,11 @@ def main():
     u.record_time()
 
   u.summarize_time()
-  target = 1.251557469
-  target = 1.252017617  # after removing random sampling
+  target = 1.252017617  # without random sampling
+  target = 1.256854534  # with random sampling but fixed seed
+  target = 0.000359572  # with random sampling and linear 
+  target = 1.251557469  # with random sampling
+
   assert abs(loss0-target)<1e-9, abs(loss0-target)
 
 if __name__=='__main__':
