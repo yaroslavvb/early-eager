@@ -4,6 +4,25 @@ import scipy
 from tensorflow.contrib.eager.python import tfe
 tfe.enable_eager_execution()
 
+# manual numpy example
+# X = np.array(([[0., 1], [2, 3]]))
+# W0 = X
+# W1 = np.array(([[0., 1], [2, 3]]))/10
+# W2 = np.array(([[4., 5], [6, 7]]))/10
+# A1 = W0
+# A2 = W1 @ A1
+# A3 = W2 @ A2
+# err = A3 - A1
+# n = 2
+# dsize = 2
+# loss = np.sum(err*err)/dsize/2
+
+# B2 = err
+# B1 = W2.T @ B2
+# B0 = W1.T @ B1
+# dW1 = B1 @ A1.T/dsize
+# dW2 = B2 @ A2.T/dsize
+
 
 def main():
   np.random.seed(1)
