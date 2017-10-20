@@ -71,17 +71,13 @@ def capturing_matmul(x, y):
   return result, grad
 
 @tfe.custom_gradient
-def kfac_matmul(x, y):
-  result = x @ y
-  def grad(dr):
-#    global idx, forward_inv, backward_inv
-    B = dr
-    A = y
+def kfac_matmul(W, A):
+  def grad(B):
     kfac_A = forward_inv.pop() @ A
     kfac_B = backward_inv.pop() @ B
-
-    return [kfac_B @ tf.transpose(kfac_A), tf.transpose(x) @ dr]
-  return result, grad
+    return [kfac_B @ tf.transpose(kfac_A), tf.transpose(W) @ B]
+  
+  return W @ A, grad
 
 forward = []
 backward = []
