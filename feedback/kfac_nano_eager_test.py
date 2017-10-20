@@ -26,6 +26,10 @@ lambda_=3e-3
 lr = 0.2
 dsize = 2
 fs = [dsize, 2, 2, 2]  # layer sizes
+
+nonlin = tf.identity
+def d_nonlin(y): return 1
+
 nonlin = tf.nn.sigmoid
 def d_nonlin(y): return y*(1-y)
 
@@ -106,9 +110,18 @@ def loss_and_output_and_grad(Wf):
       whitened_A[i] = regularized_inverse(cov_A[i]) @ A[i]
     cov_B2[i] = B2[i]@t(B2[i])/dsize
     cov_B[i] = B[i]@t(B[i])/dsize
-    whitened_B = B[i] #regularized_inverse(cov_B2[i]) @ B[i]
     whitened_B = regularized_inverse(cov_B2[i]) @ B[i]
+    whitened_B = regularized_inverse(cov_B[i]) @ B[i]
+
+    #regularized_inverse(cov_B[i])
+    #    print("A", i, cov_A[i], regularized_inverse(cov_A[i]))
+    #    print("B", i, cov_B[i], regularized_inverse(cov_B[i]))
+    
+    #    pre_dW[i] = (whitened_B @ t(whitened_A[i]))/dsize
+    #    print(i, 'A', A[i].numpy())
+    #    print(regularized_inverse(cov_A[i]).numpy())
     pre_dW[i] = (whitened_B @ t(whitened_A[i]))/dsize
+    
     dW[i] = (B[i] @ t(A[i]))/dsize
 
   loss = u.L2(err)/2/dsize
@@ -146,6 +159,7 @@ def main():
 
   u.summarize_time()
   target = 1.251557469
+  target = 1.252017617  # after removing random sampling
   assert abs(loss0-target)<1e-9, abs(loss0-target)
 
 if __name__=='__main__':
