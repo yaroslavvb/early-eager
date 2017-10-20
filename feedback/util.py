@@ -1346,6 +1346,7 @@ def get_mnist_images(fold='train'):
     assert dsize == 10000
   
   train_images = train_images.reshape(dsize, 28**2).T.astype(np.float64)/255
+  train_images = np.ascontiguousarray(train_images)
   return train_images.astype(default_np_dtype)
 
 regularizer_cache = {}
