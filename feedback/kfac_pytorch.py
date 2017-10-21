@@ -40,9 +40,9 @@ def regularized_inverse(mat, lambda_=3e-3, inverse_method='numpy',
 
 
 def train(optimizer='sgd', nonlin=torch.sigmoid, kfac=True, iters=10,
-          verbose=True):
+          print_interval=1, lr=0.2):
   
-  lr = 0.2
+  u.reset_time()
   dsize = 10000
 
   # model options
@@ -51,7 +51,6 @@ def train(optimizer='sgd', nonlin=torch.sigmoid, kfac=True, iters=10,
 
   use_cuda = torch.cuda.is_available()
   if use_cuda:
-    print('using cuda')
     torch_dtype = 'torch.cuda.FloatTensor'
 
   INVERSE_METHOD = 'numpy'  # numpy, gpu
@@ -157,41 +156,42 @@ def train(optimizer='sgd', nonlin=torch.sigmoid, kfac=True, iters=10,
   covA_inv_saved = [None]*n
   losses = []
   
-  for step in range(10):
+  for step in range(iters):
     mode = 'standard'
     output = model(data)
-    
-    mode = 'capture'
-    optimizer.zero_grad()
-    del As[:], Bs[:], As_inv[:], Bs_inv[:]
-    noise.normal_()
-
-    output_hat = Variable(output.data+noise)
-    err_hat = output_hat - output
-    loss_hat = torch.sum(err_hat*err_hat)/2/dsize
-    loss_hat.backward(retain_graph=True)
-    
-    # compute inverses
-    for i in range(n):
-      # first layer activations don't change, only compute once
-      if i == 0 and covA_inv_saved[i] is not None:
-        covA_inv = covA_inv_saved[i]
-      else:
-        covA_inv = regularized_inverse(As[i] @ As[i].t()/dsize)
-        covA_inv_saved[i] = covA_inv
-      As_inv.append(covA_inv)
-
-      covB = (Bs[i]@Bs[i].t())*dsize
-      # alternative formula: slower but numerically better result
-      # covB = (Bs[i]*dsize)@(Bs[i].t()*dsize)/dsize
-      
-      covB_inv = regularized_inverse(covB)
-      Bs_inv.append(covB_inv)
 
     if kfac:
+      mode = 'capture'
+      optimizer.zero_grad()
+      del As[:], Bs[:], As_inv[:], Bs_inv[:]
+      noise.normal_()
+
+      output_hat = Variable(output.data+noise)
+      err_hat = output_hat - output
+      loss_hat = torch.sum(err_hat*err_hat)/2/dsize
+      loss_hat.backward(retain_graph=True)
+
+      # compute inverses
+      for i in range(n):
+        # first layer activations don't change, only compute once
+        if i == 0 and covA_inv_saved[i] is not None:
+          covA_inv = covA_inv_saved[i]
+        else:
+          covA_inv = regularized_inverse(As[i] @ As[i].t()/dsize)
+          covA_inv_saved[i] = covA_inv
+        As_inv.append(covA_inv)
+
+        covB = (Bs[i]@Bs[i].t())*dsize
+        # alternative formula: slower but numerically better result
+        # covB = (Bs[i]*dsize)@(Bs[i].t()*dsize)/dsize
+
+        covB_inv = regularized_inverse(covB)
+        Bs_inv.append(covB_inv)
       mode = 'kfac'
+      
     else:
       mode = 'standard'
+      
     optimizer.zero_grad()
     err = output - data
     loss = torch.sum(err*err)/2/dsize
@@ -200,7 +200,7 @@ def train(optimizer='sgd', nonlin=torch.sigmoid, kfac=True, iters=10,
     
     loss0 = loss.data.cpu().numpy()[0]
     losses.append(loss0)
-    if verbose:
+    if step%print_interval==0:
       print("Step %3d loss %10.9f"%(step, loss0))
     u.record_time()
 
@@ -208,7 +208,8 @@ def train(optimizer='sgd', nonlin=torch.sigmoid, kfac=True, iters=10,
 
 @profile
 def main():
-  losses = train('sgd', kfac=True, nonlin=torch.sigmoid, iters=10, verbose=True)
+  losses = train('sgd', kfac=True, nonlin=torch.sigmoid, iters=10,
+                 print_interval=1, lr=0.2)
   u.summarize_time()
   print(losses)
   loss0 = losses[-1]
