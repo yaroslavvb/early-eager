@@ -61,17 +61,19 @@ def _get_output(ctx, arg, inplace=False):
   else:
     return arg.new().resize_as_(arg)
 
-forward_list = []
-backward_list = []
+forward = []
+backward = []
+mode = 'capture'  # either 'capture' or 'kfac'
 
-class Addmm(Function):
+class KfacAddmm(Function):
         
   @staticmethod
   @profile
   def forward(ctx, add_matrix, matrix1, matrix2, beta=1, alpha=1, inplace=False):
     ctx.save_for_backward(matrix1, matrix2)
     output = _get_output(ctx, add_matrix, inplace=inplace)
-    forward_list.append(matrix2)
+    if mode == 'capture':
+      forward.append(matrix2)
     return torch.addmm(beta, add_matrix, alpha,
                        matrix1, matrix2, out=output)
 
@@ -82,7 +84,15 @@ class Addmm(Function):
     grad_matrix1 = grad_matrix2 = None
 
     if ctx.needs_input_grad[1]:
-      grad_matrix1 = torch.mm(grad_output, matrix2.t())
+      if mode == 'kfac':
+        B = grad_output
+        A = matrix2
+        kfac_A = covA_inv.pop() @ A
+        kfac_B = covB_inv.pop() @ B
+
+        grad_matrix1 = torch.mm(kfac_B, kfac_A.t())
+      else:
+        grad_matrix1 = torch.mm(grad_output, matrix2.t())
 
     if ctx.needs_input_grad[2]:
       grad_matrix2 = torch.mm(matrix1.t(), grad_output)
@@ -94,14 +104,15 @@ class Addmm(Function):
       print('matrix2', matrix2)
       print('grad_matrix1', grad_matrix1)
 
-    # insert dsize correction to put activations/backprops on same scale      
-    backward_list.append(grad_output*dsize)
+    # insert dsize correction to put activations/backprops on same scale
+    if mode == 'capture':
+      backward.append(grad_output*dsize)
     return None, grad_matrix1, grad_matrix2, None, None, None
 
-@profile
-def my_matmul(mat1, mat2):
+
+def kfac_matmul(mat1, mat2):
   output = Variable(mat1.data.new(mat1.data.size(0), mat2.data.size(1)))
-  return Addmm.apply(output, mat1, mat2, 0, 1, True)
+  return KfacAddmm.apply(output, mat1, mat2, 0, 1, True)
 
 @profile
 def regularized_inverse(mat):
@@ -133,25 +144,33 @@ def copy_list(l):
 
 @profile
 def main():
-  global forward_list, backward_list, DO_PRINT
+  #  global forward, backward, DO_PRINT
+  global mode, covA_inv, covB_inv
   
   torch.manual_seed(args.seed)
   np.random.seed(args.seed)
   if args.cuda:
     torch.cuda.manual_seed(args.seed)
 
+  # feature sizes
+  fs = [args.batch_size, 28*28, 196, 28*28]
+  # number of layers
+  n = len(fs) - 2
+
+  # todo, move to more elegant backprop
+  matmul = kfac_matmul
   class Net(nn.Module):
     def __init__(self):
       super(Net, self).__init__()
-      W0 = u.ng_init(196, 784)
-      W1 = u.ng_init(784, 196)  # fix non-contiguous input
-      self.W0 = nn.Parameter(torch.from_numpy(W0))
-      self.W1 = nn.Parameter(torch.from_numpy(W1))
+      for i in range(1, n+1):
+        W0 = u.ng_init(fs[i+1], fs[i])
+        setattr(self, 'W'+str(i), nn.Parameter(torch.from_numpy(W0)))
 
     def forward(self, input):
       x = input.view(784, -1)
-      x = nonlin(my_matmul(self.W0, x))
-      x = nonlin(my_matmul(self.W1, x))
+      for i in range(1, n+1):
+        W = getattr(self, 'W'+str(i))
+        x = nonlin(matmul(W, x))
       return x.view_as(input)
 
   model = Net()
@@ -160,53 +179,56 @@ def main():
 
   data0 = u.get_mnist_images()
   data0 = data0[:, :dsize].astype(dtype)
-  data = Variable(torch.from_numpy(np.copy(data0)).contiguous())
+  data = Variable(torch.from_numpy(data0))
   if args.cuda:
     data = data.cuda()
 
   model.train()
   optimizer = optim.SGD(model.parameters(), lr=lr)
   losses = []
-  n = 2
   
   covA = [None]*n
   covA_inv = [None]*n
+  covB_inv = [None]*n
 
   noise = torch.Tensor(*data.data.shape).type(torch_dtype)
+
+  # TODO:
+  # only do 2 passes like in eager mode
+  # integrate with optimizer/same results
+  # scale to deep autoencoder
   for step in range(10):
     optimizer.zero_grad()
-    forward_list = []
-    backward_list = []
+    del forward[:]
+    del backward[:]
     output = model(data)
     err = output-data
     loss = torch.sum(err*err)/2/dsize
+    
     loss.backward(retain_graph=True)
+    backward.reverse()
+    
     loss0 = loss.data[0]
 
-    A = forward_list[:]
-    B = backward_list[::-1]
+    A = forward[:]
+    B = backward[:]
     assert len(B) == n
-
     
-    forward_list = []
-    backward_list = []
+    del forward[:]
+    del backward[:]
     
-    #    noise = torch.randn(*data.data.shape)
-    #    torch.randn(2,2).type('torch.cuda.FloatTensor')
     noise.normal_()
     synthetic_data = Variable(output.data+noise)
-    # todo, not needed?
-    if args.cuda:
-      synthetic_data = synthetic_data.cuda()
-      
+
     err2 = output - synthetic_data
     loss2 = torch.sum(err2*err2)/2/dsize
     optimizer.zero_grad()
-    backward_list = []
     loss2.backward()
-    B2 = backward_list[::-1]
+    B2 = backward[::-1]
     assert len(B2) == n
 
+
+   # mode = 'kfac'
 
     # compute whitened gradient
     pre_dW = []
@@ -219,12 +241,15 @@ def main():
         if covA[i] is None:
           covA[i] = A[i] @ t(A[i])/dsize
           covA_inv[i] = regularized_inverse(covA[i])
-          
+
       #      else:
       covB2 = B2[i]@t(B2[i])/dsize
-      covB = B[i]@t(B[i])/dsize
+      covB = B[i]@t(B[i])/dsize # todo: remove
+
+      covB_inv[i] = regularized_inverse(covB2.data)
+      
       whitened_A = covA_inv[i]@A[i]
-      whitened_B = regularized_inverse(covB2.data)@B[i].data
+      whitened_B = covB_inv[i]@B[i].data
       pre_dW.append(whitened_B @ t(whitened_A)/dsize)
 
     params = list(model.parameters())
@@ -240,10 +265,10 @@ def main():
   
   if 'Apple' in sys.version:
     target = 2.360126972
-    target = 2.335654736  # after changing randn
+    target = 2.335654736  # after changing to torch.randn
   if args.cuda:
     target = 2.337174654
-    target = 2.337215662  # switching to GPU inverse
+    target = 2.337215662  # switching to numpy inverse
     
   u.summarize_time()
   assert abs(loss0-target)<1e-9, abs(loss0-target)
