@@ -47,8 +47,8 @@ import numpy as np
 
 
 # TODO: get rid of this
-purely_linear = False  # convert sigmoids into linear nonlinearities
-purely_relu = True     # convert sigmoids into ReLUs
+#purely_linear = False  # convert sigmoids into linear nonlinearities
+#purely_relu = True     # convert sigmoids into ReLUs
 
 
 # TODO: get rid
@@ -101,10 +101,7 @@ def model_creator(batch_size, name="default", dtype=np.float32):
   model = Model(name)
 
   def get_batch_size(data):
-    if isinstance(data, IndexedGrad):
-      return int(data.live[0].shape[1])
-    else:
-      return int(data.shape[1])
+    return 10000
 
   init_dict = {}
   global_vars = []
@@ -134,23 +131,12 @@ def model_creator(batch_size, name="default", dtype=np.float32):
       
     return var
 
-  # TODO: get rid of purely_relu
   def nonlin(x):
-    if purely_relu:
-      return tf.nn.relu(x)
-    elif purely_linear:
-      return tf.identity(x)
-    else:
-      return tf.sigmoid(x)
+    return tf.sigmoid(x)
 
   # TODO: rename into "nonlin_d"
   def d_nonlin(y):
-    if purely_relu:
-      return u.relu_mask(y)
-    elif purely_linear:
-      return 1
-    else: 
-      return y*(1-y)
+    return y*(1-y)
 
   patches = train_images[:,:args.batch_size];
   test_patches = test_images[:,:args.batch_size];
@@ -318,8 +304,8 @@ def model_creator(batch_size, name="default", dtype=np.float32):
 
 @profile
 def main():
-  np.random.seed(args.seed)
-  tf.set_random_seed(args.seed)
+  np.random.seed(1)
+  tf.set_random_seed(1)
 
   logger = u.TensorboardLogger(args.run)
   
@@ -362,9 +348,11 @@ def main():
   if args.mode != 'run':
     opt = tf.train.AdamOptimizer(0.001)
   else:
-    opt = tf.train.AdamOptimizer(args.lr)
+    #    opt = tf.train.AdamOptimizer(args.lr)
+    opt = tf.train.GradientDescentOptimizer(args.lr)
   grads_and_vars = opt.compute_gradients(model.loss,
                                          var_list=model.trainable_vars)
+    
       
   grad = IndexedGrad.from_grads_and_vars(grads_and_vars)
   grad_new = kfac.correct(grad)
@@ -390,9 +378,9 @@ def main():
     kfac.start_stats_runners()
     
   for step in range(args.num_steps):
-    
+    vloss0 = 0
     if args.validate_every_n and step%args.validate_every_n == 0:
-      loss0, vloss0 = sessrun([model.loss, model.vloss])
+      loss0 = sessrun(model.loss)
     else:
       loss0, = sessrun([model.loss])
     losses.append(loss0)  # TODO: remove this
@@ -401,7 +389,7 @@ def main():
     
     elapsed = time.time()-start_time
     start_time = time.time()
-    print("%4d ms, step %4d, loss %5.2f, vloss %5.2f" %(elapsed*1e3, step,
+    print("%4d ms, step %4d, loss %10.9f, vloss %5.2f" %(elapsed*1e3, step,
                                                         loss0, vloss0))
 
     if args.method=='kfac' and not args.kfac_async:
@@ -426,14 +414,10 @@ def main():
   #    f.write(str(u.get_default_graph().as_graph_def()))
   u.summarize_time()
   
-  if args.mode == 'record':
-    u.dump_with_prompt(losses, release_test_fn)
 
-  elif args.mode == 'test':
-    targets = np.loadtxt('data/'+release_test_fn, delimiter=",")
-    u.check_equal(losses, targets, rtol=1e-2)
-    u.summarize_difference(losses, targets)
-    assert u.last_time()<800, "Expected 648 on GTX 1080"
+  target = 40.707656860
+  assert abs(loss0-target)<1e-9, abs(loss0-target)
+  assert u.last_time()<800, "Expected 648 on GTX 1080"
 
 if __name__ == '__main__':
 
@@ -478,14 +462,16 @@ if __name__ == '__main__':
   u.set_global_args(args)
   print('input args:\n', json.dumps(vars(args), indent=4, separators=(',',':')))
 
-  args.num_steps = 5
-  args.advance_batch = 1
-  args.extra_kfac_batch_advance = 1
-  args.batch_size = 10000
+  args.num_steps = 10
+  args.advance_batch = 0
+  args.extra_kfac_batch_advance = 0
+  dsize = 10000
+  args.batch_size = dsize
   args.dataset = 'mnist'
+  args.lr = 0.2
       
   train_images = u.get_mnist_images('train')
   test_images = u.get_mnist_images('test')
-  train_images = train_images[:,:args.dataset_size]  # batch last
+  train_images = train_images[:,:dsize]  # batch last
 
   main()

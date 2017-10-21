@@ -128,13 +128,15 @@ def t(mat): return torch.transpose(mat, 0, 1)
 def main():
   global mode
   
-  torch.manual_seed(args.seed)
-  np.random.seed(args.seed)
+  torch.manual_seed(1)
+  np.random.seed(1)
   if args.cuda:
-    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed(1)
 
   # feature sizes
   fs = [dsize, 28*28, 196, 28*28]
+  fs = [dsize, 28*28, 1024, 1024, 1024, 196, 1024, 1024, 1024,
+          28*28]
 
   # number of layers
   n = len(fs) - 2
@@ -225,9 +227,9 @@ def main():
 
 
   if args.cuda:
-    target = 2.337120533
+    target = 34.122142792
   else:
-    target = 2.335612774
+    target = 0
 
     
   u.summarize_time()
