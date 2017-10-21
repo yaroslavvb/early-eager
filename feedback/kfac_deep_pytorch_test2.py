@@ -126,8 +126,7 @@ def regularized_inverse(mat):
   return result
 
 
-@profile
-def main():
+def train(optimizer='sgd', kfac=True, iters=10, verbose=True):
   global mode
   
   torch.manual_seed(1)
@@ -165,8 +164,13 @@ def main():
     data = data.cuda()
 
   model.train()
-  optimizer = optim.SGD(model.parameters(), lr=lr)
-  
+  if optimizer == 'sgd':
+    optimizer = optim.SGD(model.parameters(), lr=lr)
+  elif optimizer == 'adam':
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+  else:
+    assert False, 'unknown optimizer '+optimizer
+    
   noise = torch.Tensor(*data.data.shape).type(torch_dtype)
   covA_inv_saved = [None]*n
   losses = []
@@ -202,7 +206,10 @@ def main():
       covB_inv = regularized_inverse(covB)
       Bs_inv.append(covB_inv)
 
-    mode = 'kfac'
+    if kfac:
+      mode = 'kfac'
+    else:
+      mode = 'standard'
     optimizer.zero_grad()
     err = output - data
     loss = torch.sum(err*err)/2/dsize
@@ -211,20 +218,25 @@ def main():
     
     loss0 = loss.data.cpu().numpy()[0]
     losses.append(loss0)
-    print("Step %3d loss %10.9f"%(step, loss0))
+    if verbose:
+      print("Step %3d loss %10.9f"%(step, loss0))
     u.record_time()
 
+  return losses  
+
+
+@profile
+def main():
+  losses = train('sgd', kfac=True, iters=10, verbose=True)
+  u.summarize_time()
+  print(losses)
+  loss0 = losses[-1]
 
   if args.cuda:
     target = 38.781795502
   else:
     target = 0
-
-    
-  u.summarize_time()
-  print(losses)
   assert abs(loss0-target)<1e-9, abs(loss0-target)
-    
 
 if __name__=='__main__':
   main()
