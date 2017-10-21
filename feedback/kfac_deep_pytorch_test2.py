@@ -63,7 +63,9 @@ def _get_output(ctx, arg, inplace=False):
 
 forward = []
 backward = []
-mode = 'capture'  # either 'capture' or 'kfac'
+forward_inv = []
+backward_inv = []
+mode = 'capture'  # either 'capture' or 'kfac' or 'standard'
 
 class KfacAddmm(Function):
         
@@ -72,8 +74,6 @@ class KfacAddmm(Function):
   def forward(ctx, add_matrix, matrix1, matrix2, beta=1, alpha=1, inplace=False):
     ctx.save_for_backward(matrix1, matrix2)
     output = _get_output(ctx, add_matrix, inplace=inplace)
-    if mode == 'capture':
-      forward.append(matrix2)
     return torch.addmm(beta, add_matrix, alpha,
                        matrix1, matrix2, out=output)
 
@@ -83,30 +83,19 @@ class KfacAddmm(Function):
     matrix1, matrix2 = ctx.saved_variables
     grad_matrix1 = grad_matrix2 = None
 
-    if ctx.needs_input_grad[1]:
-      if mode == 'kfac':
-        B = grad_output
-        A = matrix2
-        kfac_A = covA_inv.pop() @ A
-        kfac_B = covB_inv.pop() @ B
-
-        grad_matrix1 = torch.mm(kfac_B, kfac_A.t())
-      else:
-        grad_matrix1 = torch.mm(grad_output, matrix2.t())
+    if mode == 'capture':
+      backward.append(grad_output.data*dsize)
+      forward.append(matrix2.data)
+    elif mode == 'kfac':
+      B = grad_output.data
+      A = matrix2.data
+      kfac_A = forward_inv.pop() @ A
+      kfac_B = backward_inv.pop() @ B
+      grad_matrix1 = Variable(torch.mm(kfac_B, kfac_A.t()))
 
     if ctx.needs_input_grad[2]:
       grad_matrix2 = torch.mm(matrix1.t(), grad_output)
 
-    if DO_PRINT:
-      print("backward got")
-      print("grad_output", grad_output)
-      print("matrix1", matrix1)
-      print('matrix2', matrix2)
-      print('grad_matrix1', grad_matrix1)
-
-    # insert dsize correction to put activations/backprops on same scale
-    if mode == 'capture':
-      backward.append(grad_output*dsize)
     return None, grad_matrix1, grad_matrix2, None, None, None
 
 
@@ -135,17 +124,9 @@ def regularized_inverse(mat):
 
 def t(mat): return torch.transpose(mat, 0, 1)
 
-def copy_list(l):
-  new_list = []
-  for item in l:
-  #    new_list.append(np.copy(l.numpy()))
-    new_list.append(item.clone())
-  return new_list
-
 @profile
 def main():
-  #  global forward, backward, DO_PRINT
-  global mode, covA_inv, covB_inv
+  global mode
   
   torch.manual_seed(args.seed)
   np.random.seed(args.seed)
@@ -153,27 +134,32 @@ def main():
     torch.cuda.manual_seed(args.seed)
 
   # feature sizes
-  fs = [args.batch_size, 28*28, 196, 28*28]
+  fs = [dsize, 28*28, 196, 28*28]
+
   # number of layers
   n = len(fs) - 2
 
-  # todo, move to more elegant backprop
   matmul = kfac_matmul
   class Net(nn.Module):
     def __init__(self):
       super(Net, self).__init__()
+      # W1 = (np.array([[0., 1], [2, 3]])).astype(dtype)/10
+      # W2 = (np.array([[4., 5], [6, 7]])).astype(dtype)/10
+      # self.W1 = nn.Parameter(torch.from_numpy(W1))
+      # self.W2 = nn.Parameter(torch.from_numpy(W2))
       for i in range(1, n+1):
         W0 = u.ng_init(fs[i+1], fs[i])
         setattr(self, 'W'+str(i), nn.Parameter(torch.from_numpy(W0)))
 
     def forward(self, input):
-      x = input.view(784, -1)
+      x = input.view(fs[1], -1)
       for i in range(1, n+1):
         W = getattr(self, 'W'+str(i))
         x = nonlin(matmul(W, x))
       return x.view_as(input)
 
   model = Net()
+
   if args.cuda:
     model.cuda()
 
@@ -185,90 +171,64 @@ def main():
 
   model.train()
   optimizer = optim.SGD(model.parameters(), lr=lr)
-  losses = []
   
-  covA = [None]*n
-  covA_inv = [None]*n
-  covB_inv = [None]*n
-
   noise = torch.Tensor(*data.data.shape).type(torch_dtype)
-
-  # TODO:
-  # only do 2 passes like in eager mode
-  # integrate with optimizer/same results
-  # scale to deep autoencoder
+  covA_inv_saved = [None]*n
+  
   for step in range(10):
-    optimizer.zero_grad()
-    del forward[:]
-    del backward[:]
+    mode = 'standard'
     output = model(data)
-    err = output-data
-    loss = torch.sum(err*err)/2/dsize
     
-    loss.backward(retain_graph=True)
+    mode = 'capture'
+    optimizer.zero_grad()
+    del forward[:] 
+    del backward[:]
+    del forward_inv[:]
+    del backward_inv[:]
+    noise.normal_()
+    output_hat = Variable(output.data+noise)
+    output = model(data)
+    err_hat = output_hat - output
+    loss_hat = torch.sum(err_hat*err_hat)/2/dsize
+    loss_hat.backward(retain_graph=True)
+    
     backward.reverse()
-    
-    loss0 = loss.data[0]
-
+    forward.reverse()
+    assert len(backward) == n
+    assert len(forward) == n
     A = forward[:]
     B = backward[:]
-    assert len(B) == n
-    
-    del forward[:]
-    del backward[:]
-    
-    noise.normal_()
-    synthetic_data = Variable(output.data+noise)
 
-    err2 = output - synthetic_data
-    loss2 = torch.sum(err2*err2)/2/dsize
-    optimizer.zero_grad()
-    loss2.backward()
-    B2 = backward[::-1]
-    assert len(B2) == n
-
-
-   # mode = 'kfac'
-
-    # compute whitened gradient
-    pre_dW = []
+    # compute inverses
     for i in range(n):
-      # only compute first activation once
-      if i > 0:
-        covA[i] = A[i] @ t(A[i])/dsize
-        covA_inv[i] = regularized_inverse(covA[i])
+      # first layer doesn't change so only compute once
+      if i == 0 and covA_inv_saved[i] is not None:
+        covA_inv = covA_inv_saved[i]
       else:
-        if covA[i] is None:
-          covA[i] = A[i] @ t(A[i])/dsize
-          covA_inv[i] = regularized_inverse(covA[i])
-
-      #      else:
-      covB2 = B2[i]@t(B2[i])/dsize
-      covB = B[i]@t(B[i])/dsize # todo: remove
-
-      covB_inv[i] = regularized_inverse(covB2.data)
+        covA_inv = regularized_inverse(A[i] @ t(A[i])/dsize)
+        covA_inv_saved[i] = covA_inv
+      forward_inv.append(covA_inv)
       
-      whitened_A = covA_inv[i]@A[i]
-      whitened_B = covB_inv[i]@B[i].data
-      pre_dW.append(whitened_B @ t(whitened_A)/dsize)
+      covB_inv = regularized_inverse(B[i]@t(B[i])/dsize)
+      backward_inv.append(covB_inv)
 
-    params = list(model.parameters())
-    assert len(params) == len(pre_dW)
-    for i in range(len(params)):
-      params[i].data-=lr*pre_dW[i]
+    mode = 'kfac'
+    optimizer.zero_grad()
+    err = output - data
+    loss = torch.sum(err*err)/2/dsize
+    loss.backward()
+    optimizer.step()
     
+    loss0 = loss.data.cpu().numpy()
     print("Step %3d loss %10.9f"%(step, loss0))
     u.record_time()
 
-  loss0 = loss.data.cpu().numpy()#[0]
-  target = 2.360062122
-  
-  if 'Apple' in sys.version:
-    target = 2.360126972
-    target = 2.335654736  # after changing to torch.randn
+
   if args.cuda:
-    target = 2.337174654
-    target = 2.337215662  # switching to numpy inverse
+    target = 2.337120533
+  else:
+    target = 2.335612774
+
     
   u.summarize_time()
   assert abs(loss0-target)<1e-9, abs(loss0-target)
