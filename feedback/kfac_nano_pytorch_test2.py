@@ -65,7 +65,7 @@ forward = []
 backward = []
 forward_inv = []
 backward_inv = []
-mode = 'capture'  # either 'capture' or 'kfac'
+mode = 'capture'  # either 'capture' or 'kfac' or 'standard'
 
 class KfacAddmm(Function):
         
@@ -74,8 +74,6 @@ class KfacAddmm(Function):
   def forward(ctx, add_matrix, matrix1, matrix2, beta=1, alpha=1, inplace=False):
     ctx.save_for_backward(matrix1, matrix2)
     output = _get_output(ctx, add_matrix, inplace=inplace)
-    if mode == 'capture':
-      forward.append(matrix2)
     return torch.addmm(beta, add_matrix, alpha,
                        matrix1, matrix2, out=output)
 
@@ -87,28 +85,17 @@ class KfacAddmm(Function):
 
     if mode == 'capture':
       backward.append(grad_output.data*dsize)
-
-    if ctx.needs_input_grad[1]:
-      if mode == 'kfac':
-        B = grad_output.data
-        A = matrix2.data
-        kfac_A = forward_inv.pop() @ A
-        kfac_B = backward_inv.pop() @ B
-        grad_matrix1 = Variable(torch.mm(kfac_B, kfac_A.t()))
-      else:
-        grad_matrix1 = torch.mm(grad_output, matrix2.t())
+      forward.append(matrix2.data)
+    elif mode == 'kfac':
+      B = grad_output.data
+      A = matrix2.data
+      kfac_A = forward_inv.pop() @ A
+      kfac_B = backward_inv.pop() @ B
+      grad_matrix1 = Variable(torch.mm(kfac_B, kfac_A.t()))
 
     if ctx.needs_input_grad[2]:
       grad_matrix2 = torch.mm(matrix1.t(), grad_output)
 
-    if DO_PRINT:
-      print("backward got")
-      print("grad_output", grad_output)
-      print("matrix1", matrix1)
-      print('matrix2', matrix2)
-      print('grad_matrix1', grad_matrix1)
-
-    # insert dsize correction to put activations/backprops on same scale
     return None, grad_matrix1, grad_matrix2, None, None, None
 
 
@@ -137,17 +124,9 @@ def regularized_inverse(mat):
 
 def t(mat): return torch.transpose(mat, 0, 1)
 
-def copy_list(l):
-  new_list = []
-  for item in l:
-  #    new_list.append(np.copy(l.numpy()))
-    new_list.append(item.clone())
-  return new_list
-
 @profile
 def main():
-  #  global forward, backward, DO_PRINT
-  global mode, covA_inv, covB_inv
+  global mode
   
   torch.manual_seed(args.seed)
   np.random.seed(args.seed)
@@ -160,27 +139,22 @@ def main():
   # number of layers
   n = len(fs) - 2
 
-  # todo, move to more elegant backprop
-  matmul = kfac_matmul
   class Net(nn.Module):
     def __init__(self):
       super(Net, self).__init__()
-
       W1 = (np.array([[0., 1], [2, 3]])).astype(dtype)/10
       W2 = (np.array([[4., 5], [6, 7]])).astype(dtype)/10
       self.W1 = nn.Parameter(torch.from_numpy(W1))
       self.W2 = nn.Parameter(torch.from_numpy(W2))
 
-
     def forward(self, input):
-      x = input.view(2, -1)
+      x = input.view(fs[1], -1)
       for i in range(1, n+1):
         W = getattr(self, 'W'+str(i))
-        x = nonlin(matmul(W, x))
+        x = nonlin(kfac_matmul(W, x))
       return x.view_as(input)
 
   model = Net()
-
 
   if args.cuda:
     model.cuda()
@@ -195,24 +169,13 @@ def main():
 
   model.train()
   optimizer = optim.SGD(model.parameters(), lr=lr)
-  losses = []
   
-  covA = [None]*n
-  covA_inv = [None]*n
-  covB_inv = [None]*n
-
   noise = torch.Tensor(*data.data.shape).type(torch_dtype)
-
-  # TODO:
-  # only do 2 passes like in eager mode
-  # integrate with optimizer/same results
-  # scale to deep autoencoder
+  covA_inv_saved = [None]*n
+  
   for step in range(10):
-    mode = 'none'
+    mode = 'standard'
     output = model(data)
-    err = output - data
-    loss = torch.sum(err*err)/2/dsize
-    loss0 = loss.data.cpu().numpy()
     
     mode = 'capture'
     optimizer.zero_grad()
@@ -220,7 +183,6 @@ def main():
     del backward[:]
     del forward_inv[:]
     del backward_inv[:]
-    
     noise.normal_()
     output_hat = Variable(output.data+noise)
     output = model(data)
@@ -229,29 +191,24 @@ def main():
     loss_hat.backward(retain_graph=True)
     
     backward.reverse()
+    forward.reverse()
     assert len(backward) == n
     assert len(forward) == n
     A = forward[:]
-    B_hat = backward[:]
+    B = backward[:]
 
     # compute inverses
     for i in range(n):
-      # todo: only compute first activation once
-      if i > 0:
-        covA[i] = A[i] @ t(A[i])/dsize
-        covA_inv[i] = regularized_inverse(covA[i])
+      # first layer doesn't change so only compute once
+      if i == 0 and covA_inv_saved[i] is not None:
+        covA_inv = covA_inv_saved[i]
       else:
-        if covA[i] is None:
-          covA[i] = A[i] @ t(A[i])/dsize
-          covA_inv[i] = regularized_inverse(covA[i])
-
-      #      else:
-      covB_hat = B_hat[i]@t(B_hat[i])/dsize
-
-      covB_inv[i] = regularized_inverse(covB_hat)
-      forward_inv.append(covA_inv[i])
-      backward_inv.append(covB_inv[i])
-
+        covA_inv = regularized_inverse(A[i] @ t(A[i])/dsize)
+        covA_inv_saved[i] = covA_inv
+      forward_inv.append(covA_inv)
+      
+      covB_inv = regularized_inverse(B[i]@t(B[i])/dsize)
+      backward_inv.append(covB_inv)
 
     mode = 'kfac'
     optimizer.zero_grad()
@@ -260,10 +217,10 @@ def main():
     loss.backward()
     optimizer.step()
     
+    loss0 = loss.data.cpu().numpy()
     print("Step %3d loss %10.9f"%(step, loss0))
     u.record_time()
 
-  loss0 = loss.data.cpu().numpy()#[0]
 
   if args.cuda:
     target = 1.251739264
