@@ -23,9 +23,6 @@ from util import t  # transpose
 use_tikhonov=False
 
 # Test generation releases
-#release_name='kfac_cifar'  #  broken, in tests was 294.863098 after 10 steps, now 350.697174
-#release_name='kfac_mnist'  # release name fixes a specific test set#
-#release_name='kfac_tiny' 
 release_name='mnist_deep'   # deep synchronous MNIST (oct_batches12)
 release_test_fn = release_name+'_losses_test.csv'
 
@@ -481,62 +478,14 @@ if __name__ == '__main__':
   u.set_global_args(args)
   print('input args:\n', json.dumps(vars(args), indent=4, separators=(',',':')))
 
-  if args.mode == 'test' or args.mode == 'record':
-    if release_name == 'kfac_cifar':
-      args.num_steps = 10
-      args.dataset = 'cifar'
-      args.Lambda=1e-1
-      args.fixed_labels = True
-      args.seed = 1
-      args.batch_size = 100
-
-    elif release_name == 'kfac_mnist':
-      args.num_steps = 5
-      args.dataset = 'mnist'
-      args.fixed_labels = True
-      args.seed = 1
-      args.batch_size = 100
-      args.kfac_batch_size = 100
-      args.dataset_size = args.batch_size
-
-    elif release_name == 'kfac_tiny':
-      args.num_steps = 5
-      args.dataset = 'mnist'
-      args.fixed_labels = True
-      args.seed = 1
-      args.batch_size = 100
-      args.kfac_batch_size = 100
-      args.dataset_size = args.batch_size
-    elif release_name == 'mnist_deep':
-      args.num_steps = 5
-      args.advance_batch = 1
-      args.extra_kfac_batch_advance = 1
-      args.batch_size = 10000
-      args.dataset = 'mnist'
+  args.num_steps = 5
+  args.advance_batch = 1
+  args.extra_kfac_batch_advance = 1
+  args.batch_size = 10000
+  args.dataset = 'mnist'
       
-
-    rundir = u.setup_experiment_run_directory(args.run)
-    with open(rundir+'/args.txt', 'w') as f:
-      f.write(json.dumps(vars(args), indent=4, separators=(',',':')))
-      f.write('\n')
-
-  if args.dataset == 'cifar':
-    # load data globally once
-    from keras.datasets import cifar10
-    (X_train, y_train), (X_test, y_test) = cifar10.load_data()
-    X_train = X_train.astype(np.float32)
-    X_train = X_train.reshape((X_train.shape[0], -1))
-    #    X_test = X_test.astype(np.float32)
-    #    X_test = X_test.reshape((X_test.shape[0], -1))
-    X_train /= 255
-    X_test /= 255
-    
-    # todo: rename to better names
-    train_images = X_train.T  # batch first
-    test_images = X_test.T
-  elif args.dataset == 'mnist':
-    train_images = u.get_mnist_images('train')
-    test_images = u.get_mnist_images('test')
-    train_images = train_images[:,:args.dataset_size]  # batch last
+  train_images = u.get_mnist_images('train')
+  test_images = u.get_mnist_images('test')
+  train_images = train_images[:,:args.dataset_size]  # batch last
 
   main()
