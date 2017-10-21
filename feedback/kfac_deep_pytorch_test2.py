@@ -52,12 +52,11 @@ nonlin = torch.sigmoid
 
 INVERSE_METHOD = 'numpy'  # cpu, numpy, gpu
 
-
-forward = []
-backward = []
-forward_inv = []
-backward_inv = []
-mode = 'capture'  # either 'capture' or 'kfac' or 'standard'
+As = []
+Bs = []
+As_inv = []
+Bs_inv = []
+mode = 'capture'  # 'capture', 'kfac', 'standard'
 
 class KfacAddmm(Function):
   @staticmethod
@@ -83,16 +82,15 @@ class KfacAddmm(Function):
     grad_matrix1 = grad_matrix2 = None
 
     if mode == 'capture':
-      backward.append(grad_output.data)
-      forward.append(matrix2.data)
+      Bs.insert(0, grad_output.data)
+      As.insert(0, matrix2.data)
     elif mode == 'kfac':
       B = grad_output.data
       A = matrix2.data
-      kfac_A = forward_inv.pop() @ A
-      kfac_B = backward_inv.pop() @ B
+      kfac_A = As_inv.pop() @ A
+      kfac_B = Bs_inv.pop() @ B
       grad_matrix1 = Variable(torch.mm(kfac_B, kfac_A.t()))
     elif mode == 'standard':
-      #      grad_matrix1 = Variable(torch.mm(grad_output.data, matrix2.t()))
       grad_matrix1 = torch.mm(grad_output, matrix2.t())
 
     else:
@@ -128,8 +126,6 @@ def regularized_inverse(mat):
   return result
 
 
-def t(mat): return torch.transpose(mat, 0, 1)
-
 @profile
 def main():
   global mode
@@ -139,14 +135,10 @@ def main():
   if args.cuda:
     torch.cuda.manual_seed(1)
 
-  # feature sizes
-  fs = [dsize, 28*28, 1024, 1024, 1024, 196, 1024, 1024, 1024,
-          28*28]
+  # feature sizes at each layer
+  fs = [dsize, 28*28, 1024, 1024, 1024, 196, 1024, 1024, 1024, 28*28]
+  n = len(fs) - 2   # number of matmuls
 
-  # number of layers
-  n = len(fs) - 2
-
-  matmul = kfac_matmul
   class Net(nn.Module):
     def __init__(self):
       super(Net, self).__init__()
@@ -158,7 +150,7 @@ def main():
       x = input.view(fs[1], -1)
       for i in range(1, n+1):
         W = getattr(self, 'W'+str(i))
-        x = nonlin(matmul(W, x))
+        x = nonlin(kfac_matmul(W, x))
       return x.view_as(input)
 
   model = Net()
@@ -185,41 +177,30 @@ def main():
     
     mode = 'capture'
     optimizer.zero_grad()
-    del forward[:] 
-    del backward[:]
-    del forward_inv[:]
-    del backward_inv[:]
+    del As[:], Bs[:], As_inv[:], Bs_inv[:]
     noise.normal_()
+
     output_hat = Variable(output.data+noise)
-    output = model(data)
     err_hat = output_hat - output
     loss_hat = torch.sum(err_hat*err_hat)/2/dsize
     loss_hat.backward(retain_graph=True)
     
-    backward.reverse()
-    forward.reverse()
-    assert len(backward) == n
-    assert len(forward) == n
-    A = forward[:]
-    B = backward[:]
-
-
     # compute inverses
     for i in range(n):
-      # first layer doesn't change so only compute once
+      # first layer activations don't change, only compute once
       if i == 0 and covA_inv_saved[i] is not None:
         covA_inv = covA_inv_saved[i]
       else:
-        covA_inv = regularized_inverse(A[i] @ t(A[i])/dsize)
+        covA_inv = regularized_inverse(As[i] @ As[i].t()/dsize)
         covA_inv_saved[i] = covA_inv
-      forward_inv.append(covA_inv)
+      As_inv.append(covA_inv)
 
-      covB = (B[i]@t(B[i]))*dsize
+      covB = (Bs[i]@Bs[i].t())*dsize
       # alternative formula: slower but numerically better result
-      # covB = (B[i]*dsize)@t(B[i]*dsize)/dsize
+      # covB = (Bs[i]*dsize)@(Bs[i].t()*dsize)/dsize
       
       covB_inv = regularized_inverse(covB)
-      backward_inv.append(covB_inv)
+      Bs_inv.append(covB_inv)
 
     mode = 'kfac'
     optimizer.zero_grad()
