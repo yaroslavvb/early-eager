@@ -221,7 +221,7 @@ def main():
       covB_inv = regularized_inverse(covB)
       backward_inv.append(covB_inv)
 
-    mode = 'standard'
+    mode = 'kfac'
     optimizer.zero_grad()
     err = output - data
     loss = torch.sum(err*err)/2/dsize
