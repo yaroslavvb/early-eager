@@ -50,9 +50,7 @@ lr = 0.2
 dsize = 10000
 nonlin = torch.sigmoid
 
-# debugging options
 INVERSE_METHOD = 'numpy'  # cpu, numpy, gpu
-DO_PRINT = False
 
 def _get_output(ctx, arg, inplace=False):
   if inplace:
@@ -84,7 +82,7 @@ class KfacAddmm(Function):
     grad_matrix1 = grad_matrix2 = None
 
     if mode == 'capture':
-      backward.append(grad_output.data*dsize)
+      backward.append(grad_output.data)
       forward.append(matrix2.data)
     elif mode == 'kfac':
       B = grad_output.data
@@ -92,6 +90,9 @@ class KfacAddmm(Function):
       kfac_A = forward_inv.pop() @ A
       kfac_B = backward_inv.pop() @ B
       grad_matrix1 = Variable(torch.mm(kfac_B, kfac_A.t()))
+    else:
+      grad_matrix1 = torch.mm(grad_output, matrix2.data)
+      
 
     if ctx.needs_input_grad[2]:
       grad_matrix2 = torch.mm(matrix1.t(), grad_output)
@@ -102,6 +103,7 @@ class KfacAddmm(Function):
 def kfac_matmul(mat1, mat2):
   output = Variable(mat1.data.new(mat1.data.size(0), mat2.data.size(1)))
   return KfacAddmm.apply(output, mat1, mat2, 0, 1, True)
+
 
 @profile
 def regularized_inverse(mat):
@@ -145,10 +147,6 @@ def main():
   class Net(nn.Module):
     def __init__(self):
       super(Net, self).__init__()
-      # W1 = (np.array([[0., 1], [2, 3]])).astype(dtype)/10
-      # W2 = (np.array([[4., 5], [6, 7]])).astype(dtype)/10
-      # self.W1 = nn.Parameter(torch.from_numpy(W1))
-      # self.W2 = nn.Parameter(torch.from_numpy(W2))
       for i in range(1, n+1):
         W0 = u.ng_init(fs[i+1], fs[i])
         setattr(self, 'W'+str(i), nn.Parameter(torch.from_numpy(W0)))
@@ -176,6 +174,7 @@ def main():
   
   noise = torch.Tensor(*data.data.shape).type(torch_dtype)
   covA_inv_saved = [None]*n
+  losses = []
   
   for step in range(10):
     mode = 'standard'
@@ -201,6 +200,7 @@ def main():
     A = forward[:]
     B = backward[:]
 
+
     # compute inverses
     for i in range(n):
       # first layer doesn't change so only compute once
@@ -210,8 +210,12 @@ def main():
         covA_inv = regularized_inverse(A[i] @ t(A[i])/dsize)
         covA_inv_saved[i] = covA_inv
       forward_inv.append(covA_inv)
+
+      covB = (B[i]@t(B[i]))*dsize
+      # alternative formula, slower but numerically better result
+      # covB = (B[i]*dsize)@t(B[i]*dsize)/dsize
       
-      covB_inv = regularized_inverse(B[i]@t(B[i])/dsize)
+      covB_inv = regularized_inverse(covB)
       backward_inv.append(covB_inv)
 
     mode = 'kfac'
@@ -221,18 +225,20 @@ def main():
     loss.backward()
     optimizer.step()
     
-    loss0 = loss.data.cpu().numpy()
+    loss0 = loss.data.cpu().numpy()[0]
+    losses.append(loss0)
     print("Step %3d loss %10.9f"%(step, loss0))
     u.record_time()
 
 
   if args.cuda:
-    target = 34.122142792
+    target = 38.781795502
   else:
     target = 0
 
     
   u.summarize_time()
+  print(losses)
   assert abs(loss0-target)<1e-9, abs(loss0-target)
     
 
