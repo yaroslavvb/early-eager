@@ -52,12 +52,6 @@ nonlin = torch.sigmoid
 
 INVERSE_METHOD = 'numpy'  # cpu, numpy, gpu
 
-def _get_output(ctx, arg, inplace=False):
-  if inplace:
-    ctx.mark_dirty(arg)
-    return arg
-  else:
-    return arg.new().resize_as_(arg)
 
 forward = []
 backward = []
@@ -66,12 +60,19 @@ backward_inv = []
 mode = 'capture'  # either 'capture' or 'kfac' or 'standard'
 
 class KfacAddmm(Function):
+  @staticmethod
+  def _get_output(ctx, arg, inplace=False):
+    if inplace:
+      ctx.mark_dirty(arg)
+      return arg
+    else:
+      return arg.new().resize_as_(arg)
         
   @staticmethod
   @profile
   def forward(ctx, add_matrix, matrix1, matrix2, beta=1, alpha=1, inplace=False):
     ctx.save_for_backward(matrix1, matrix2)
-    output = _get_output(ctx, add_matrix, inplace=inplace)
+    output = KfacAddmm._get_output(ctx, add_matrix, inplace=inplace)
     return torch.addmm(beta, add_matrix, alpha,
                        matrix1, matrix2, out=output)
 
@@ -90,9 +91,12 @@ class KfacAddmm(Function):
       kfac_A = forward_inv.pop() @ A
       kfac_B = backward_inv.pop() @ B
       grad_matrix1 = Variable(torch.mm(kfac_B, kfac_A.t()))
+    elif mode == 'standard':
+      #      grad_matrix1 = Variable(torch.mm(grad_output.data, matrix2.t()))
+      grad_matrix1 = torch.mm(grad_output, matrix2.t())
+
     else:
-      grad_matrix1 = torch.mm(grad_output, matrix2.data)
-      
+      assert False, 'unknown mode '+mode
 
     if ctx.needs_input_grad[2]:
       grad_matrix2 = torch.mm(matrix1.t(), grad_output)
@@ -136,7 +140,6 @@ def main():
     torch.cuda.manual_seed(1)
 
   # feature sizes
-  fs = [dsize, 28*28, 196, 28*28]
   fs = [dsize, 28*28, 1024, 1024, 1024, 196, 1024, 1024, 1024,
           28*28]
 
@@ -212,13 +215,13 @@ def main():
       forward_inv.append(covA_inv)
 
       covB = (B[i]@t(B[i]))*dsize
-      # alternative formula, slower but numerically better result
+      # alternative formula: slower but numerically better result
       # covB = (B[i]*dsize)@t(B[i]*dsize)/dsize
       
       covB_inv = regularized_inverse(covB)
       backward_inv.append(covB_inv)
 
-    mode = 'kfac'
+    mode = 'standard'
     optimizer.zero_grad()
     err = output - data
     loss = torch.sum(err*err)/2/dsize
