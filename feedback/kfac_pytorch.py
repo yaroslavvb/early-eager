@@ -40,7 +40,7 @@ def regularized_inverse(mat, lambda_=3e-3, inverse_method='numpy',
 
 
 def train(optimizer='sgd', nonlin=torch.sigmoid, kfac=True, iters=10,
-          print_interval=1, lr=0.2):
+          lr=0.2, eval_every_n_steps=1, print_interval=200):
   
   u.reset_time()
   dsize = 10000
@@ -138,11 +138,14 @@ def train(optimizer='sgd', nonlin=torch.sigmoid, kfac=True, iters=10,
   if use_cuda:
     model.cuda()
 
-  data0 = u.get_mnist_images()
-  data0 = data0[:, :dsize].astype(dtype)
-  data = Variable(torch.from_numpy(data0))
+  images = u.get_mnist_images()
+  train_data0 = images[:, :dsize].astype(dtype)
+  train_data = Variable(torch.from_numpy(train_data0))
+  test_data0 = images[:, dsize:2*dsize].astype(dtype)
+  test_data = Variable(torch.from_numpy(test_data0))
   if use_cuda:
-    data = data.cuda()
+    train_data = train_data.cuda()
+    test_data = test_data.cuda()
 
   model.train()
   if optimizer == 'sgd':
@@ -152,13 +155,14 @@ def train(optimizer='sgd', nonlin=torch.sigmoid, kfac=True, iters=10,
   else:
     assert False, 'unknown optimizer '+optimizer
     
-  noise = torch.Tensor(*data.data.shape).type(torch_dtype)
+  noise = torch.Tensor(*train_data.data.shape).type(torch_dtype)
   covA_inv_saved = [None]*n
   losses = []
+  vlosses = []
   
   for step in range(iters):
     mode = 'standard'
-    output = model(data)
+    output = model(train_data)
 
     if kfac:
       mode = 'capture'
@@ -191,9 +195,19 @@ def train(optimizer='sgd', nonlin=torch.sigmoid, kfac=True, iters=10,
       
     else:
       mode = 'standard'
-      
+
+    if step%eval_every_n_steps==0:
+      old_mode = mode
+      mode = 'standard'
+      test_output = model(test_data)
+      test_err = test_data - test_output
+      test_loss = torch.sum(test_err*test_err)/2/dsize
+      vloss0 = test_loss.data.cpu().numpy()[0]
+      vlosses.append(vloss0)
+      mode = old_mode
+
     optimizer.zero_grad()
-    err = output - data
+    err = output - train_data
     loss = torch.sum(err*err)/2/dsize
     loss.backward()
     optimizer.step()
@@ -202,13 +216,15 @@ def train(optimizer='sgd', nonlin=torch.sigmoid, kfac=True, iters=10,
     losses.append(loss0)
     if step%print_interval==0:
       print("Step %3d loss %10.9f"%(step, loss0))
+
+      
     u.record_time()
 
-  return losses  
+  return losses, vlosses
 
 @profile
 def main():
-  losses = train('sgd', kfac=True, nonlin=torch.sigmoid, iters=10,
+  losses,vlosses = train(optimizer='sgd', kfac=True, nonlin=torch.sigmoid, iters=10,
                  print_interval=1, lr=0.2)
   u.summarize_time()
   print(losses)
