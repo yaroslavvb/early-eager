@@ -7,20 +7,19 @@ import time
 from tensorflow.contrib.eager.python import tfe
 tfe.enable_eager_execution()
 
-import common_gd
-args = common_gd.args
-args.cuda = not args.no_cuda and (tfe.num_gpus() > 0)
-
 def dot(a, b):
   """Dot product function since TensorFlow doesn't have one."""
   return tf.reduce_sum(a*b)
 
 def verbose_func(s):
   print(s)
-  
-def lbfgs(opfunc, x, config, state):
+
+final_loss = None
+def lbfgs(opfunc, x, config, state, do_verbose):
   """port of lbfgs.lua, using TensorFlow eager mode.
   """
+
+  global final_loss
   
   maxIter = config.maxIter or 20
   maxEval = config.maxEval or maxIter*1.25
@@ -192,9 +191,13 @@ def lbfgs(opfunc, x, config, state):
       verbose('function value changing less than tolX'+str(tf.abs(f-f_old)))
       break
 
+    if do_verbose:
+      print("Step %3d loss %6.5f msec %6.3f"%(nIter, f.numpy(), u.last_time()))
+      u.record_time()
 
-    print("Step %3d loss %6.5f"%(nIter, f.numpy()))
-    u.record_time()
+    if nIter == maxIter - 1:
+      final_loss = f.numpy()
+
 
   # save state
   state.old_dirs = old_dirs
@@ -217,17 +220,19 @@ class Struct(dummy):
       return super(dummy, self).__getattribute__('__dict__')
     return self.__dict__.get(key, 0)
 
-def main():
-  tf.set_random_seed(args.seed)
-  np.random.seed(args.seed)
+W_flat = None
+def benchmark(batch_size, max_iter, seed=1, cuda=True, verbose=False):
+  global final_loss, W_flat
+  tf.set_random_seed(seed)
+  np.random.seed(seed)
   
-  images = tf.constant(u.get_mnist_images().T)
-  images = images[:args.batch_size]
-  if args.cuda:
-    images = images.as_gpu_tensor()
+  images = tf.constant(u.get_mnist_images(batch_size).T)
+  images = images[:batch_size]
+  if cuda:
+    images = images.gpu()
   data = images
 
-  if args.cuda:
+  if cuda:
     device='/gpu:0'
   else:
     device=''
@@ -235,10 +240,16 @@ def main():
   device_ctx = tf.device(device)
   device_ctx.__enter__()
 
-  W_flat = tfe.Variable(tf.zeros([args.visible_size*args.hidden_size]))
+  visible_size = 28*28
+  hidden_size = 196
+  initial_val = tf.zeros([visible_size*hidden_size])
+  if W_flat is None:
+    W_flat = tfe.Variable(initial_val, name='W_flat')
+  W_flat.assign(initial_val)
+  
   
   def loss_fn(w_flat):
-    w = tf.reshape(w_flat, [args.visible_size, args.hidden_size])
+    w = tf.reshape(w_flat, [visible_size, hidden_size])
     x = tf.matmul(data, w)
     x = tf.sigmoid(x)
     x = tf.matmul(x, w, transpose_b=True)
@@ -251,25 +262,27 @@ def main():
     return value, grads[0]
       
   # initialize weights
-  W_flat.assign(u.ng_init(args.visible_size, args.hidden_size).flatten())
+  W_flat.assign(u.ng_init(visible_size, hidden_size).flatten())
 
-  if args.gd:
-    for step in range(args.iters):
-      f, g = opfunc(W_flat)
-      W_flat.assign_sub(g*args.lr)
+  state = Struct()
+  config = Struct()
+  config.maxIter = max_iter
+  config.verbose = True
+  x, f_hist, currentFuncEval = lbfgs(opfunc, W_flat, config, state, verbose)
 
-      print("Step %3d loss %6.5f"%(step, f.numpy()))
-      u.record_time()
+  if verbose:
+    u.summarize_time()
 
-  else:
-    state = Struct()
-    config = Struct()
-    config.maxIter = args.iters
-    config.verbose = True
-    x, f_hist, currentFuncEval = lbfgs(opfunc, W_flat, config, state)
-  
-  u.summarize_time()
-    
+  return final_loss
+
+
+def main():
+  import common_gd
+  args = common_gd.args
+  args.cuda = not args.no_cuda and (tfe.num_gpus() > 0)
+
+  print(benchmark(batch_size=args.batch_size, max_iter=args.iters, seed=args.seed, cuda=args.cuda, verbose=True))
 
 if __name__=='__main__':
   main()
+  
