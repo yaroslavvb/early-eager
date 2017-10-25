@@ -34,7 +34,8 @@ USE_MKL_SVD=True                   # Tensorflow vs MKL SVD
 DUMP_BAD_SVD=False                 # when SVD fails, dump matrix to temp
 
 if USE_MKL_SVD:
-  assert np.__config__.get_info("lapack_mkl_info"), "No MKL detected :("
+  if np.__config__.get_info("lapack_mkl_info") is None:
+    print("No MKL detected :(")
 
 
 from scipy import linalg
