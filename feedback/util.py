@@ -1295,7 +1295,7 @@ def traced_run(fetches):
   timeline_counter+=1
   return results  
 
-def get_mnist_images(fold='train'):
+def get_mnist_images(max_images=0, fold='train'):
   """Returns mnist images, batch dimension last."""
   
   import gzip
@@ -1318,6 +1318,8 @@ def get_mnist_images(fold='train'):
         raise ValueError('Invalid magic number %d in MNIST image file: %s' %
                          (magic, f.name))
       num_images = _read32(bytestream)
+      if max_images:
+        num_images = max_images
       rows = _read32(bytestream)
       cols = _read32(bytestream)
       buf = bytestream.read(rows * cols * num_images)
@@ -1342,10 +1344,18 @@ def get_mnist_images(fold='train'):
   train_images = extract_images(open(local_file, 'rb'))
   dsize = train_images.shape[0]
   if fold == 'train':
-    assert dsize == 60000
+    if not max_images:
+      dsize == 60000
+    else:
+      dsize = max_images
+      assert dsize <= 60000
   else:
-    assert dsize == 10000
-  
+    if not max_images:
+      dsize == 60000
+    else:
+      dsize = max_images
+      assert dsize <= 10000
+
   train_images = train_images.reshape(dsize, 28**2).T.astype(np.float64)/255
   train_images = np.ascontiguousarray(train_images)
   return train_images.astype(default_np_dtype)

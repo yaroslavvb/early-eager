@@ -7,20 +7,24 @@ import torch.optim as optim
 from torch.autograd import Variable
 import numpy as np
 
+# todo: remove args
+# todo: make images global
+
 import common_gd
 args = common_gd.args
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
 step = 0
-def main():
+
+def benchmark(batch_size, verbose=False):
   torch.manual_seed(args.seed)
   np.random.seed(args.seed)
   if args.cuda:
     torch.cuda.manual_seed(args.seed)
 
   
-  images = torch.Tensor(u.get_mnist_images().T)
-  images = images[:args.batch_size]
+  images = torch.Tensor(u.get_mnist_images(batch_size).T)
+  images = images[:batch_size]
   if args.cuda:
     images = images.cuda()
   data = Variable(images)
@@ -55,8 +59,9 @@ def main():
     optimizer.zero_grad()
     output = model(data)
     loss = F.mse_loss(output, data)
-    loss0 = loss.data[0]
-    print("step %3d loss %6.5f"%(step, loss0))
+    if verbose:
+      loss0 = loss.data[0]
+      print("Step %3d loss %6.5f msec %6.3f"%(step, loss0, u.last_time()))
     step+=1
     loss.backward()
     u.record_time()
@@ -68,9 +73,19 @@ def main():
     iters = 1
   for i in range(iters):
     optimizer.step(closure)
-    
-  u.summarize_time()
-    
+
+  output = model(data)
+  loss = F.mse_loss(output, data)
+  loss0 = loss.data[0]
+  print("Final loss", loss0)
+
+  if verbose:
+    u.summarize_time()
+
+  return loss0
+
+def main():
+  benchmark(args.batch_size, verbose=True)
 
 if __name__=='__main__':
   main()
