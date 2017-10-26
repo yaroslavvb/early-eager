@@ -58,8 +58,9 @@ environment. Try out the notebooks below.
 
 ## Documentation
 
-For an introduction to TensorFlow eager execution, see the Jupyter notebooks:
+For an introduction to eager execution in TensorFlow, see:
 
-- [Basic Usage](examples/notebooks/1_basics.ipynb)
-- [Gradients](examples/notebooks/2_gradients.ipynb)
-- [Importing Data](examples/notebooks/3_datasets.ipynb)
+- [User Guide](g3doc/guide.md)
+- Notebook: [Basic Usage](examples/notebooks/1_basics.ipynb)
+- Notebook: [Gradients](examples/notebooks/2_gradients.ipynb)
+- Notebook: [Importing Data](examples/notebooks/3_datasets.ipynb)
