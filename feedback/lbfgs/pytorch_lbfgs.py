@@ -13,6 +13,11 @@ step = 0
 final_loss = None
 
 def benchmark(batch_size, max_iter, seed=1, cuda=True, verbose=False):
+  global step, final_loss
+  
+  step = 0
+  final_loss = None
+
   torch.manual_seed(seed)
   np.random.seed(seed)
   if cuda:
@@ -46,7 +51,7 @@ def benchmark(batch_size, max_iter, seed=1, cuda=True, verbose=False):
     model.cuda()
   
   model.train()
-  optimizer = optim.LBFGS(model.parameters(), max_iter=max_iter, lr=1.0)
+  optimizer = optim.LBFGS(model.parameters(), max_iter=max_iter, history_size=100, lr=1.0)
 
   def closure():
     global step, final_loss
