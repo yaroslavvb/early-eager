@@ -51,7 +51,7 @@ def benchmark(batch_size, iters, seed=1, cuda=True, verbose=False):
     model.cuda()
   
   model.train()
-  optimizer = optim.LBFGS(model.parameters(), iters=iters, history_size=100, lr=1.0)
+  optimizer = optim.LBFGS(model.parameters(), max_iter=iters, history_size=100, lr=1.0)
 
   def closure():
     global step, final_loss
