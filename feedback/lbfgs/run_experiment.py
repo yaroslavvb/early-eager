@@ -30,10 +30,10 @@ def run_experiment(iters, name):
 
   for batch_size in batch_sizes:
     def eager_run():
-      return eager_lbfgs.benchmark(batch_size=batch_size, max_iter=iters)
+      return eager_lbfgs.benchmark(batch_size=batch_size, iters=iters)
     eager_stats.append(benchmark(eager_run))
     def pytorch_run():
-      return pytorch_lbfgs.benchmark(batch_size=batch_size, max_iter=iters)
+      return pytorch_lbfgs.benchmark(batch_size=batch_size, iters=iters)
     pytorch_stats.append(benchmark(pytorch_run))
 
   print(eager_stats)

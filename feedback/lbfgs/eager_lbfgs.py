@@ -221,7 +221,7 @@ class Struct(dummy):
     return self.__dict__.get(key, 0)
 
 W_flat = None
-def benchmark(batch_size, max_iter, seed=1, cuda=True, verbose=False):
+def benchmark(batch_size, iters, seed=1, cuda=True, verbose=False):
   global final_loss, W_flat
   tf.set_random_seed(seed)
   np.random.seed(seed)
@@ -266,7 +266,7 @@ def benchmark(batch_size, max_iter, seed=1, cuda=True, verbose=False):
 
   state = Struct()
   config = Struct()
-  config.maxIter = max_iter
+  config.maxIter = iters
   config.verbose = True
   x, f_hist, currentFuncEval = lbfgs(opfunc, W_flat, config, state, verbose)
 
@@ -281,7 +281,7 @@ def main():
   args = common_gd.args
   args.cuda = not args.no_cuda and (tfe.num_gpus() > 0)
 
-  print(benchmark(batch_size=args.batch_size, max_iter=args.iters, seed=args.seed, cuda=args.cuda, verbose=True))
+  print(benchmark(batch_size=args.batch_size, iters=args.iters, seed=args.seed, cuda=args.cuda, verbose=True))
 
 if __name__=='__main__':
   main()

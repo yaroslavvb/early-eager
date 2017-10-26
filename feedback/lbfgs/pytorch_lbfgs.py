@@ -12,7 +12,7 @@ import numpy as np
 step = 0
 final_loss = None
 
-def benchmark(batch_size, max_iter, seed=1, cuda=True, verbose=False):
+def benchmark(batch_size, iters, seed=1, cuda=True, verbose=False):
   global step, final_loss
   
   step = 0
@@ -51,7 +51,7 @@ def benchmark(batch_size, max_iter, seed=1, cuda=True, verbose=False):
     model.cuda()
   
   model.train()
-  optimizer = optim.LBFGS(model.parameters(), max_iter=max_iter, history_size=100, lr=1.0)
+  optimizer = optim.LBFGS(model.parameters(), iters=iters, history_size=100, lr=1.0)
 
   def closure():
     global step, final_loss
@@ -62,7 +62,7 @@ def benchmark(batch_size, max_iter, seed=1, cuda=True, verbose=False):
       loss0 = loss.data[0]
       print("Step %3d loss %6.5f msec %6.3f"%(step, loss0, u.last_time()))
     step+=1
-    if step == max_iter:
+    if step == iters:
       final_loss = loss.data[0]
     loss.backward()
     u.record_time()
@@ -84,7 +84,7 @@ def main():
   args = common_gd.args
   args.cuda = not args.no_cuda and torch.cuda.is_available()
 
-  print(benchmark(batch_size=args.batch_size, max_iter=args.iters, seed=args.seed, cuda = args.cuda, verbose=True))
+  print(benchmark(batch_size=args.batch_size, iters=args.iters, seed=args.seed, cuda = args.cuda, verbose=True))
 
 if __name__=='__main__':
   main()
