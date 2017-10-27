@@ -17,7 +17,8 @@
 Reference [Deep Residual Learning for Image
 Recognition](https://arxiv.org/abs/1512.03385)
 
-Adapted from tf.keras.applications.ResNet50.
+Adapted from tf.keras.applications.ResNet50. A notable difference is that the
+model here outputs logits while the Keras model outputs probability.
 """
 from __future__ import absolute_import
 from __future__ import division
@@ -26,7 +27,7 @@ from __future__ import print_function
 import functools
 
 import tensorflow as tf
-from tensorflow.contrib.eager.python import tfe
+import tensorflow.contrib.eager as tfe
 
 
 class _IdentityBlock(tfe.Network):
@@ -272,7 +273,7 @@ class ResNet50(tfe.Network):
 
     if self.include_top:
       self.fc1000 = self.track_layer(
-          tf.layers.Dense(classes, activation=tf.nn.softmax, name='fc1000'))
+          tf.layers.Dense(classes, name='fc1000'))
     else:
       reduction_indices = [1, 2] if data_format == 'channels_last' else [2, 3]
       reduction_indices = tf.constant(reduction_indices)

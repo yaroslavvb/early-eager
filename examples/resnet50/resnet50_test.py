@@ -19,12 +19,14 @@ from __future__ import division
 from __future__ import print_function
 
 import gc
+import tempfile
 import time
 
 import tensorflow as tf
 
-from tensorflow.contrib.eager.python import tfe
+import tensorflow.contrib.eager as tfe
 from tensorflow.contrib.eager.python.examples.resnet50 import resnet50
+from tensorflow.contrib.summary import summary_test_util
 from tensorflow.python.client import device_lib
 
 
@@ -51,9 +53,11 @@ def random_batch(batch_size):
 def train_one_step(model, images, labels, optimizer):
 
   def model_loss():
-    prediction = model(images, training=True)
-    return tf.reduce_mean(
-        tf.keras.losses.binary_crossentropy(labels, prediction))
+    logits = model(images, training=True)
+    loss = tf.losses.softmax_cross_entropy(
+        logits=logits, onehot_labels=labels)
+    tf.contrib.summary.scalar(name='loss', tensor=loss)
+    return loss
 
   optimizer.minimize(model_loss)
 
@@ -62,7 +66,7 @@ class ResNet50Test(tf.test.TestCase):
 
   def test_apply(self):
     device, data_format = device_and_data_format()
-    model = resnet50.ResNet50(data_format, trainable=False)
+    model = resnet50.ResNet50(data_format)
     with tf.device(device):
       images, _ = random_batch(2)
       output = model(images)
@@ -70,7 +74,7 @@ class ResNet50Test(tf.test.TestCase):
 
   def test_apply_no_top(self):
     device, data_format = device_and_data_format()
-    model = resnet50.ResNet50(data_format, include_top=False, trainable=False)
+    model = resnet50.ResNet50(data_format, include_top=False)
     with tf.device(device):
       images, _ = random_batch(2)
       output = model(images)
@@ -80,8 +84,7 @@ class ResNet50Test(tf.test.TestCase):
 
   def test_apply_with_pooling(self):
     device, data_format = device_and_data_format()
-    model = resnet50.ResNet50(
-        data_format, include_top=False, pooling='avg', trainable=False)
+    model = resnet50.ResNet50(data_format, include_top=False, pooling='avg')
     with tf.device(device):
       images, _ = random_batch(2)
       output = model(images)
@@ -89,16 +92,24 @@ class ResNet50Test(tf.test.TestCase):
 
   def test_train(self):
     device, data_format = device_and_data_format()
-    model = resnet50.ResNet50(data_format, trainable=True)
-    with tf.device(device):
-      optimizer = tf.train.GradientDescentOptimizer(0.1)
-      images, labels = random_batch(2)
-      train_one_step(model, images, labels, optimizer)
-      self.assertEqual(320, len(model.variables))
+    model = resnet50.ResNet50(data_format)
+    tf.train.get_or_create_global_step()
+    logdir = tempfile.mkdtemp()
+    with tf.contrib.summary.create_summary_file_writer(
+        logdir, max_queue=0,
+        name='t0').as_default(), tf.contrib.summary.always_record_summaries():
+      with tf.device(device):
+        optimizer = tf.train.GradientDescentOptimizer(0.1)
+        images, labels = random_batch(2)
+        train_one_step(model, images, labels, optimizer)
+        self.assertEqual(320, len(model.variables))
+    events = summary_test_util.events_from_file(logdir)
+    self.assertEqual(len(events), 2)
+    self.assertEqual(events[1].summary.value[0].tag, 'loss')
 
   def test_no_garbage(self):
     device, data_format = device_and_data_format()
-    model = resnet50.ResNet50(data_format, trainable=True)
+    model = resnet50.ResNet50(data_format)
     optimizer = tf.train.GradientDescentOptimizer(0.1)
     with tf.device(device):
       images, labels = random_batch(2)
@@ -129,23 +140,6 @@ class MockIterator(object):
 
   def next(self):
     return self._tensors
-
-
-class DatasetIterator(object):
-
-  def __init__(self, tensors):
-    with tf.device('/device:CPU:0'):
-      ds = tf.contrib.data.Dataset.from_tensors(tensors).repeat()
-      self._iter = tfe.Iterator(ds)
-
-  def next(self):
-    items = self._iter.next()
-    # Copy to the device.
-    # TODO(b/67432909): As of October 3, 2017, Dataset iterators always produce
-    # tensors in CPU memory. rohanj@ is working on a convenient API to prefetch
-    # the elements in a Dataset into device memory. When that happens,
-    # get rid of this hack.
-    return [tf.identity(x) for x in items]
 
 
 class ResNet50Benchmarks(tf.test.Benchmark):
@@ -183,7 +177,7 @@ class ResNet50Benchmarks(tf.test.Benchmark):
 
   def benchmark_eager_apply(self):
     device, data_format = device_and_data_format()
-    model = resnet50.ResNet50(data_format, trainable=False)
+    model = resnet50.ResNet50(data_format)
     batch_size = 64
     num_burn = 5
     num_iters = 30
@@ -204,7 +198,7 @@ class ResNet50Benchmarks(tf.test.Benchmark):
       (images, labels) = random_batch(batch_size)
       num_burn = 3
       num_iters = 10
-      model = resnet50.ResNet50(data_format, trainable=True)
+      model = resnet50.ResNet50(data_format)
       optimizer = tf.train.GradientDescentOptimizer(0.1)
 
       with tf.device(device):
@@ -226,10 +220,13 @@ class ResNet50Benchmarks(tf.test.Benchmark):
     self._benchmark_eager_train('eager_train', MockIterator)
 
   def benchmark_eager_train_datasets(self):
-    # TODO(ashankar): This should go away and the Datasets iterator should
-    # be the one that is used in benchmark_eager_train once performance
-    # of benchmark_eager_train_datasets is on par with benchmark_eager_train.
-    self._benchmark_eager_train('eager_train_dataset', DatasetIterator)
+
+    def make_iterator(tensors):
+      with tf.device('/device:CPU:0'):
+        ds = tf.data.Dataset.from_tensors(tensors).repeat()
+      return tfe.Iterator(ds)
+
+    self._benchmark_eager_train('eager_train_dataset', make_iterator)
 
 
 if __name__ == '__main__':
