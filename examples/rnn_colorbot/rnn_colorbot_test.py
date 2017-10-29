@@ -19,40 +19,51 @@ from __future__ import print_function
 
 import tensorflow as tf
 
-import tensorflow.contrib.eager as tfe
-from tensorflow.contrib.eager.python.examples.mnist import mnist
+from tensorflow.contrib.eager.python import tfe
+from tensorflow.contrib.eager.python.examples.rnn_colorbot import rnn_colorbot
+
+
+LABEL_DIMENSION = 5
 
 
 def device():
   return "/device:GPU:0" if tfe.num_gpus() else "/device:CPU:0"
 
 
-def data_format():
-  return "channels_first" if tfe.num_gpus() else "channels_last"
-
-
 def random_dataset():
   batch_size = 64
-  images = tf.random_normal([batch_size, 784])
-  digits = tf.random_uniform([batch_size], minval=0, maxval=10, dtype=tf.int32)
-  labels = tf.one_hot(digits, 10)
-  return tf.data.Dataset.from_tensors((images, labels))
+  time_steps = 10
+  alphabet = 50
+  chars = tf.one_hot(
+      tf.random_uniform(
+          [batch_size, time_steps], minval=0, maxval=alphabet, dtype=tf.int32),
+      alphabet)
+  sequence_length = tf.constant(
+      [time_steps for _ in range(batch_size)], dtype=tf.int64)
+  labels = tf.random_normal([batch_size, LABEL_DIMENSION])
+  return tf.data.Dataset.from_tensors((labels, chars, sequence_length))
 
 
-class MNISTTest(tf.test.TestCase):
+class RNNColorbotTest(tf.test.TestCase):
 
   def testTrainOneEpoch(self):
-    model = mnist.MNISTModel(data_format())
-    optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.01)
+    model = rnn_colorbot.RNNColorbot(
+        rnn_cell_sizes=[256, 128, 64],
+        label_dimension=LABEL_DIMENSION,
+        keep_prob=1.0)
+    optimizer = tf.train.AdamOptimizer(learning_rate=.01)
     dataset = random_dataset()
     with tf.device(device()):
-      mnist.train_one_epoch(model, optimizer, dataset)
+      rnn_colorbot.train_one_epoch(model, optimizer, dataset)
 
   def testTest(self):
-    model = mnist.MNISTModel(data_format())
+    model = rnn_colorbot.RNNColorbot(
+        rnn_cell_sizes=[256],
+        label_dimension=LABEL_DIMENSION,
+        keep_prob=1.0)
     dataset = random_dataset()
     with tf.device(device()):
-      mnist.test(model, dataset)
+      rnn_colorbot.test(model, dataset)
 
 
 if __name__ == "__main__":

@@ -23,12 +23,13 @@ from __future__ import division
 from __future__ import print_function
 
 import argparse
+import os
 import sys
 import time
 
 import tensorflow as tf
 
-from tensorflow.contrib.eager.python import tfe
+import tensorflow.contrib.eager as tfe
 from tensorflow.examples.tutorials.mnist import input_data
 
 FLAGS = None
@@ -42,7 +43,7 @@ class MNISTModel(tfe.Network):
   and
   https://github.com/tensorflow/models/blob/master/tutorials/image/mnist/convolutional.py
 
-  But written using the Keras/tf.layers API.
+  But written using the tf.layers API.
   """
 
   def __init__(self, data_format):
@@ -106,41 +107,54 @@ def loss(predictions, labels):
           logits=predictions, labels=labels))
 
 
+def compute_accuracy(predictions, labels):
+  return tf.reduce_sum(
+      tf.cast(
+          tf.equal(
+              tf.argmax(predictions, axis=1,
+                        output_type=tf.int64),
+              tf.argmax(labels, axis=1,
+                        output_type=tf.int64)),
+          dtype=tf.float32)) / float(predictions.shape[0].value)
+
+
 def train_one_epoch(model, optimizer, dataset, log_interval=None):
-
+  tf.train.get_or_create_global_step()
   for (batch, (images, labels)) in enumerate(tfe.Iterator(dataset)):
-    # TODO(ashankar): Remove this: b/67734394
-    (images, labels) = (tf.identity(images), tf.identity(labels))
+    with tf.contrib.summary.record_summaries_every_n_global_steps(10):
+      # TODO(ashankar): Remove this: b/67734394
+      (images, labels) = (tf.identity(images), tf.identity(labels))
 
-    # TODO(agarwal): switch to functools.partial to avoid this pylint issue.
-    # pylint: disable=cell-var-from-loop
-    def model_loss():
-      return loss(model(images, training=True), labels)
-    # pylint: enable=cell-var-from-loop
+      # TODO(agarwal): switch to functools.partial to avoid this pylint issue.
+      # pylint: disable=cell-var-from-loop,missing-docstring
+      def model_loss():
+        prediction = model(images, training=True)
+        loss_value = loss(prediction, labels)
+        tf.contrib.summary.scalar('loss', loss_value)
+        tf.contrib.summary.scalar('accuracy',
+                                  compute_accuracy(prediction, labels))
+        return loss_value
+      # pylint: enable=cell-var-from-loop
 
-    optimizer.minimize(model_loss)
-    if log_interval and batch % log_interval == 0:
-      print('Batch #{}\tLoss: {:.6f}'.format(batch, model_loss().numpy()))
+      optimizer.minimize(model_loss, global_step=tf.train.get_global_step())
+      if log_interval and batch % log_interval == 0:
+        print('Batch #{}\tLoss: {:.6f}'.format(batch, model_loss().numpy()))
 
 
 def test(model, dataset):
-  (total_loss, total_accuracy, batches) = (0., 0., 0)
-
-  def accuracy(labels, predictions):
-    correct_prediction = tf.equal(
-        tf.argmax(predictions, axis=1, output_type=tf.int64),
-        tf.argmax(labels, axis=1, output_type=tf.int64))
-    return tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+  """Perform an evaluation of `model` on the examples from `dataset`."""
+  avg_loss = tfe.metrics.Mean('loss')
+  accuracy = tfe.metrics.Accuracy('accuracy')
 
   for (images, labels) in tfe.Iterator(dataset):
     # TODO(ashankar): Remove this: b/67734394
-    (images, labels) = (tf.identity(images), tf.identity(labels))
     predictions = model(images, training=False)
-    total_loss += loss(predictions, labels).numpy()
-    total_accuracy += accuracy(labels, predictions).numpy()
-    batches += 1
-  print('Test set: Average loss: {:.4f}, Accuracy: {:4f}%\n'.format(
-      total_loss / batches, 100. * total_accuracy / batches))
+    avg_loss(loss(predictions, labels))
+    accuracy(tf.argmax(predictions, axis=1, output_type=tf.int64),
+             tf.argmax(labels, axis=1, output_type=tf.int64))
+  with tf.contrib.summary.always_record_summaries():
+    print('Test set: Average loss: {:.4f}, Accuracy: {:4f}%\n'.format(
+        avg_loss.result().numpy(), 100 * accuracy.result().numpy()))
 
 
 def load_data(data_dir):
@@ -168,14 +182,26 @@ def main(_):
   model = MNISTModel(data_format)
   optimizer = tf.train.MomentumOptimizer(FLAGS.lr, FLAGS.momentum)
 
-  # TODO(apassos,josh11b): Demonstrate summaries/checkpoints.
+  if FLAGS.output_dir:
+    train_dir = os.path.join(FLAGS.output_dir, 'train')
+    test_dir = os.path.join(FLAGS.output_dir, 'eval')
+    tf.gfile.MakeDirs(FLAGS.output_dir)
+  else:
+    train_dir = None
+    test_dir = None
+  summary_writer = tf.contrib.summary.create_summary_file_writer(
+      train_dir, flush_secs=10)
+  test_summary_writer = tf.contrib.summary.create_summary_file_writer(
+      test_dir, flush_secs=10, name='test')
   with tf.device(device):
     for epoch in range(1, 11):
       start = time.time()
-      train_one_epoch(model, optimizer, train_ds, FLAGS.log_interval)
+      with summary_writer.as_default():
+        train_one_epoch(model, optimizer, train_ds, FLAGS.log_interval)
       end = time.time()
       print('\nTrain time for epoch #%d: %f' % (epoch, end - start))
-      test(model, test_ds)
+      with test_summary_writer.as_default():
+        test(model, test_ds)
 
 
 if __name__ == '__main__':
@@ -197,6 +223,12 @@ if __name__ == '__main__':
       default=10,
       metavar='N',
       help='how many batches to wait before logging training status')
+  parser.add_argument(
+      '--output_dir',
+      type=str,
+      default=None,
+      metavar='N',
+      help='Directory to write TensorBoard summaries')
   parser.add_argument(
       '--lr',
       type=float,

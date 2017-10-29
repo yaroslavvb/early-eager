@@ -19,6 +19,7 @@ cuda_py_test(
     srcs = ["resnet50_test.py"],
     additional_deps = [
         ":resnet50",
+        "//tensorflow/contrib/summary:summary_test_util",
         "//tensorflow/contrib/eager/python:tfe",
         "//tensorflow:tensorflow_py",
     ],
@@ -30,7 +31,12 @@ cuda_py_test(
     srcs = ["resnet50_graph_test.py"],
     additional_deps = [
         ":resnet50",
+        "//tensorflow/contrib/summary:summary_test_util",
         "//third_party/py/numpy",
         "//tensorflow:tensorflow_py",
+    ],
+    tags = [
+        "noasan",
+        "nomsan",
     ],
 )

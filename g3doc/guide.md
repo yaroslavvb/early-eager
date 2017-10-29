@@ -49,7 +49,7 @@ With TensorFlow installed, eager execution is enabled via a single call:
 ```python
 import tensorflow as tf
 
-from tensorflow.contrib.eager.python import tfe
+import tensorflow.contrib.eager as tfe
 
 tfe.enable_eager_execution()
 ```
@@ -236,8 +236,8 @@ if tfe.num_gpus() > 1:
 ### Automatic Differentiation
 
 [Automatic
-differentiation](https://en.wikipedia.org/wiki/Automatic_differentiation) is an
-integral part of many machine learning algorithms (e.g.,
+differentiation](https://en.wikipedia.org/wiki/Automatic_differentiation) is
+very useful when implementing many machine learning algorithms (e.g.,
 [backpropagation](https://en.wikipedia.org/wiki/Backpropagation) for training
 neural networks). For this purpose, TensorFlow eager execution provides an
 [autograd](https://github.com/HIPS/autograd)-style API for automatic
@@ -340,7 +340,8 @@ many arguments.
 
 In fact, eager execution encourages use of the [Keras](https://keras.io)-style
 "Layer" classes in the
-[`tf.layers`](https://www.tensorflow.org/api_docs/python/tf/layers) module.
+[`tf.layers`](https://www.tensorflow.org/versions/master/api_docs/python/tf/layers)
+module.
 
 Furthermore, you may want to apply more sophisticated techniques to compute
 parameter updates, such as those in
@@ -437,13 +438,13 @@ parameters of the model as arguments to the `loss` function.
 ### Using Keras and the Layers API
 
 [Keras](https://keras.io) is a popular API for defining model structures. The
-[`tf.keras.layers`](https://www.tensorflow.org/api_docs/python/tf/contrib/keras/layers)
+[`tf.keras.layers`](https://www.tensorflow.org/versions/master/api_docs/python/tf/keras/layers)
 module provides a set of building blocks for models and is implemented using the
 `tf.layer.Layer` subclasses in the
-[`tf.layers`](https://www.tensorflow.org/api_docs/python/tf/layers) module. We
-encourage the use of these same building blocks when using TensorFlow's eager
-execution feature. For example, the very same linear regression model can be
-built using `tf.layers.Dense`:
+[`tf.layers`](https://www.tensorflow.org/versions/master/api_docs/python/tf/layers)
+module. We encourage the use of these same building blocks when using
+TensorFlow's eager execution feature. For example, the very same linear
+regression model can be built using `tf.layers.Dense`:
 
 ```python
 class Model(object):
@@ -514,19 +515,185 @@ for i in range(20001):
 print("Loss on test set: %f" % loss(model, data.test.images, data.test.labels).numpy())
 ```
 
+For a more complete example, see
+[`tensorflow/contrib/eager/python/examples/mnist.py`](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples/mnist/mnist.py)
+
 ### Checkpointing trained variables
 
-TODO(ashankar):
+TensorFlow Variables (`tfe.Variable`) provides a way to represent shared,
+persistent state of your model. The `tfe.Saver` class (which is a thin wrapper
+over the
+[`tf.train.Saver`](https://www.tensorflow.org/api_docs/python/tf/train/Saver)
+class) provides a means to save and restore variables to and from _checkpoints_.
+
+For example:
+
+```python
+# Create variables.
+x = tfe.Variable(10., name='x')
+y = tfe.Variable(5., name='y')
+
+# Create a Saver
+saver = tfe.Saver([x, y])
+
+# Assign new values to the variables and save.
+x.assign(2.)
+saver.save('/tmp/ckpt')
+
+# Change the variable after saving
+x.assign(11.)
+assert 16. == (x + y).numpy() # 11 + 5
+
+# Restore the values in the checkpoint
+saver.restore('/tmp/ckpt')
+
+assert 7. == (x + y).numpy() # 2 + 5
+```
+
+### `tfe.Network`
+
+You may often want to organize your models using classes, like the `MNISTModel`
+class described above. We recommend inheriting from the `tfe.Network` class as
+it provides conveniences like keeping track of all model variables and methods
+to save and restore from checkpoints.
+
+Sub-classes register `Layer`s (like classes in
+[`tf.layers`](https://www.tensorflow.org/versions/master/api_docs/python/tf/layers),
+or [Keras
+layers](https://www.tensorflow.org/versions/master/api_docs/python/tf/keras/layers))
+using a call to `self.track_layer()` and define the computation in an
+implementation of `call`.
+
+Note that `tf.layers.Layer` objects (like `tf.layers.Dense`) create variables
+lazily, when the first input is encountered.
+
+For example, a consider the following two-layer neural network:
+
+```python
+class TwoLayerNet(tfe.Network):
+  def __init__(self):
+    super(TwoLayerNet, self).__init__()
+    self.l1 = self.track_layer(
+      tf.layers.Dense(2, activation=tf.nn.relu, use_bias=False))
+    self.l2 = self.track_layer(tf.layers.Dense(3, use_bias=False))
+
+  def call(self, x):
+    return self.l2(self.l1(x))
+
+net = TwoLayerNet()
+
+# No variables created yet
+assert 0 == len(net.variables)
+
+# They are created on first input:
+inp = tf.constant([[1]])
+
+# Since input is a 1x1 matrix, net.l1 has 2 units and net.l2 has 3 units,
+# the output is the product of a 1x1 matrix with a 1x2 matrix with a 2x3
+# matrix.
+assert [1, 3] == net(inp).shape.as_list()
+assert 1 == len(net.l1.variables)
+assert 1 == len(net.l2.variables)
+assert 2 == len(net.variables)  # weights for each layer.
+assert [1, 2] == net.variables[0].shape.as_list()
+assert [2, 3] == net.variables[1].shape.as_list()
+```
+
+The `tfe.Network` class is itself a sub-class of `tf.layers.Layer`, which allows
+instances to be embedded in other networks. For example:
+
+```python
+class ThreeLayerNet(tfe.Network):
+  def __init__(self):
+    super(ThreeLayerNet, self).__init__()
+    self.a = self.track_layer(TwoLayerNet())
+    self.b = self.track_layer(tf.layers.Dense(4, use_bias=False))
+
+  def call(self, x):
+    return self.b(self.a(x))
+
+net = ThreeLayerNet()
+
+assert [1, 4] == net(inp).shape.as_list()
+assert 3 == len(net.variables)
+assert [1, 2] == net.variables[0].shape.as_list()
+assert [2, 3] == net.variables[1].shape.as_list()
+assert [3, 4] == net.variables[2].shape.as_list()
+```
+
+See more examples in
+[`tensorflow/contrib/eager/python/examples`](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples).
+
+TODO(allenl,ashankar): Add some notes about `tfe.Network.save()` and
+`tfe.Network.load()`.
 
 ### Summaries, metrics and TensorBoard
 
-TODO(ashankar):
+[TensorBoard](https://www.tensorflow.org/get_started/summaries_and_tensorboard)
+is a popular tool for understanding, debugging and optimizing the model training
+process. To benefit from the visualizations offered by TensorBoard, summary
+events need to be written during the course of execution of your program. You
+might find many Tensorflow programs that include the
+[`tf.summary`](https://www.tensorflow.org/api_guides/python/summary) operations
+during graph construction.
+
+The `tf.summary` operations are not compatible with eager execution, but an
+equivalent alternative exists in
+[`tf.contrib.summary`](https://www.tensorflow.org/versions/master/api_guides/python/tf/contrib/summary/)
+that is compatible with both eager execution and graph construction.
+
+During model construction simply insert summary operations like
+`tf.contrib.summary.scalar`. These operations do nothing by default, unless a
+summary writer is currently active and a writing policy is set.
+
+For example, to record summaries once every 100 global steps, use:
+
+```python
+tf.train.get_or_create_global_step()  # Ensuring the global step variable exists
+writer = tf.contrib.summary.create_summary_file_writer(logdir)
+
+for _ in range(iterations):
+  with writer.as_default():
+    with tf.contrib.summary.record_summaries_every_n_global_steps(100):
+      # your model code goes here
+      tf.contrib.summary.scalar('loss', loss)
+      # ...
+```
+
+See the full mnist example in
+[`tensorflow/contrib/eager/python/examples/mnist`](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples/mnist)
+for a full model using `tf.contrib.summary`.
+
+Similarly to summaries, the metrics in `tf.metrics` are currently not compatible
+with eager execution. We instead provide object-oriented metrics in the
+`tfe.metrics` package, which are compatible with graph construction as well.
+
+Metrics in the `tfe.metrics`, such as `tfe.metrics.Mean` and
+`tfe.Metrics.Accuracy`, all implement an intuitive object-oriented
+interface. Here's an example of how to use the `tfe.metrics.Mean` metric:
+
+```python
+# Metrics are objects, which can be created and destroyed.
+my_mean = tfe.metrics.Mean(name='my_mean')
+# While a metric is active, you can call it as a function to accumulate into its
+# internal state.
+my_mean(0.0)
+my_mean(10.0)
+# Once you've finished updating the metric, you can get its result. In this case
+# a simple average over all the calls to it. If a summary writer is active the
+# metric will write the appropriate summaries using the metric name.
+assert my_mean.result().numpy() == 5.0
+```
+
+For a full example of a model using metrics for evaluation, see the mnist
+example in
+[`tensorflow/contrib/eager/python/examples/mnist`](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples/mnist).
 
 ### Input Pipelines
 
 The discussion above has been centered around the computation executed by your
 model. The
-[`tf.data`](https://www.tensorflow.org/versions/r1.4/api_docs/python/tf/data)
+[`tf.data`](https://www.tensorflow.org/versions/master/api_docs/python/tf/data)
 module provides APIs to build complex input pipelines from simple, reusable
 pieces.
 
@@ -535,7 +702,7 @@ TensorFlow graphs, the same API calls are used when eager execution is enabled.
 The process of iterating over elements of the dataset differs. When eager
 execution is enabled, the discussion on iterator creation using
 `make_one_shot_iterator()` and `get_next()` in the [Programmer's
-Guide](https://www.tensorflow.org/versions/r1.4/programmers_guide/datasets) is
+Guide](https://www.tensorflow.org/versions/master/programmers_guide/datasets) is
 not relevant and instead a more Pythonic `Iterator` class is available.
 
 For example:
@@ -592,14 +759,32 @@ demonstrate this as well.
 
 Some differences worth noting:
 
-TODO(ashankar): Things to talk about:
+-   There is no notion of a `tf.placeholder` or a `tf.Session` when eager
+    execution is enabled.
+-   Many properties on the `tf.Tensor` object, like `tf.Tensor.name`,
+    `tf.Tensor.op`, `tf.Tensor.inputs` are not meaningful when eager execution
+    is enabled and their use will raise an `AttributeError`.
+-   To use `tfe.implicit_gradients` in graph construction, variables must be
+    created with [`use_resource=True`] provided to
+    [`tf.get_variable()`](https://www.tensorflow.org/api_docs/python/tf/get_variable)
+    or
+    [`tf.variable_scope()`](https://www.tensorflow.org/api_docs/python/tf/variable_scope).
+-   Some API calls (such as the functional-style `tf.layers.dense`,
+    `tf.layers.conv2d`) are not compatible with eager execution. Use of such
+    methods should raise an error indicating the alternative (e.g., the
+    `tf.layers.Dense` and `tf.layers.Conv2D` classes).
 
--   `tf.gradients` vs. the `tfe` gradient functions
--   Variable naming
--   Use of functional layers API vs. object oriented one
--   tfe.Variable (ResourceVariables) vs. tf.Variable
--   Sessions and placeholders
--   `Tensor` properties like op, name, inputs etc.
+## What next?
 
-TODO(ashankar): Update links (some of the links will currently only be valid
-after the website is updated for the 1.4 release)
+Please give eager execution a spin. This feature is in early stages and is
+evolving, so we welcome your feedback via issues on GitHub (see [known
+issues](https://github.com/tensorflow/tensorflow/labels/eager)).
+
+You may want to browse through some sample code, including benchmarks for some:
+
+-   [MNIST
+    classifier](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples/mnist)
+-   [ResNet50 image
+    classification](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples/resnet50)
+
+TODO(ashankar): Add PTB, LinearRegression, Colorbot.
