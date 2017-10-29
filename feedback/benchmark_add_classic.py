@@ -25,7 +25,7 @@ def benchmark():
   infeed = tf.placeholder(dtype, shape=(n,))
 
   # turn off optimizations just in case
-  sess = tf.Session(config=config)
+  sess = tf.Session()
   a = tf.Variable(infeed)
   sess.run(a.initializer, feed_dict={infeed: np.ones((n,),dtype=dtype)})
   b = a
