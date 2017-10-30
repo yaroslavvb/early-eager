@@ -46,12 +46,14 @@ class MNISTTest(tf.test.TestCase):
     optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.01)
     dataset = random_dataset()
     with tf.device(device()):
+      tf.train.get_or_create_global_step()
       mnist.train_one_epoch(model, optimizer, dataset)
 
   def testTest(self):
     model = mnist.MNISTModel(data_format())
     dataset = random_dataset()
     with tf.device(device()):
+      tf.train.get_or_create_global_step()
       mnist.test(model, dataset)
 
 

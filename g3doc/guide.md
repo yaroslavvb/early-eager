@@ -331,6 +331,51 @@ To utilize the GPU, place the code above within a `with tf.device("/gpu:0"):`
 block. (However, this particular model, with two floating point parameters, is
 unlikely to benefit from any GPU acceleration.)
 
+### Customizing gradients
+
+One may want to define custom gradients for an operation, or for a function.
+This may be useful for multiple reasons, including providing a more efficient
+or more [numerically stable](https://en.wikipedia.org/wiki/Numerical_stability)
+gradient for a sequence of operations.
+
+For example, consider the function `log(1 + e^x)`, which commonly occurs in the
+computation of cross entropy and log likelihoods.
+
+```python
+def log1pexp(x):
+  return tf.log(1 + tf.exp(x))
+grad_log1pexp = tfe.gradients_function(log1pexp)
+
+# Works fine at x = 0.
+assert 0.5 == float(grad_log1pexp(0.)[0])
+
+# Returns a `nan` at x = 100 due to numerical instability.
+import math
+assert math.isnan(float(grad_log1pexp(100.)[0]))
+```
+
+We can use a custom gradient for the above function that analytically
+simplifies the gradient expression.
+
+```python
+@tfe.custom_gradient
+def log1pexp(x):
+  e = tf.exp(x)
+  def grad(dy):
+    return dy * (1 - 1 / (1 + e))
+  return tf.log(1 + e), grad
+grad_log1pexp = tfe.gradients_function(log1pexp)
+
+# Works as before at x = 0.
+assert 0.5 == float(grad_log1pexp(0.)[0])
+
+# But now works at x = 100 as well.
+assert 1.0 == float(grad_log1pexp(100.)[0])
+```
+Also notice how the gradient function implementation reuses an expression
+(`tf.exp(x)`) that was computed during the forward pass, hence making the
+gradient computation more efficient by avoiding redundant computation.
+
 ## Building and training models
 
 In practice, your computation may have many parameters to be optimized (by
@@ -586,7 +631,7 @@ net = TwoLayerNet()
 assert 0 == len(net.variables)
 
 # They are created on first input:
-inp = tf.constant([[1]])
+inp = tf.constant([[1.]])
 
 # Since input is a 1x1 matrix, net.l1 has 2 units and net.l2 has 3 units,
 # the output is the product of a 1x1 matrix with a 1x2 matrix with a 2x3
@@ -624,8 +669,65 @@ assert [3, 4] == net.variables[2].shape.as_list()
 See more examples in
 [`tensorflow/contrib/eager/python/examples`](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples).
 
-TODO(allenl,ashankar): Add some notes about `tfe.Network.save()` and
-`tfe.Network.load()`.
+`tfe.Saver` in combination with `tfe.restore_variables_on_create` provides a
+convenient way to save and load checkpoints without changing the program once
+the checkpoint has been created. For example, we can set an objective for the
+output of our network, choose an optimizer, and a location for the checkpoint:
+
+```python
+objective = tf.constant([[2., 3., 4., 5.]])
+optimizer = tf.train.AdamOptimizer(0.01)
+checkpoint_directory = '/tmp/tfe_example'
+checkpoint_prefix = os.path.join(checkpoint_directory, 'ckpt')
+net = ThreeLayerNet()
+```
+
+Note that variables have not been created yet. We want them to be restored from
+a checkpoint, if one exists, so we create them inside a
+`tfe.restore_variables_on_create` context manager. Then our training loop is the
+same whether starting training or resuming from a previous checkpoint:
+
+```python
+with tfe.restore_variables_on_create(
+    tf.train.latest_checkpoint(checkpoint_directory)):
+  global_step = tf.train.get_or_create_global_step()
+  for _ in range(100):
+    loss_fn = lambda: tf.norm(net(inp) - objective)
+    optimizer.minimize(loss_fn, global_step=global_step)
+    if tf.equal(global_step % 20, 0):
+      print("Step %d, output %s" % (global_step.numpy(), 
+                                    net(inp).numpy()))
+      all_variables = (
+          net.variables
+          + tfe.get_optimizer_variables(optimizer)
+          + [global_step])
+      # Save the checkpoint.
+      tfe.Saver(all_variables).save(checkpoint_prefix, global_step=global_step)
+```
+
+The first time it runs, `Network` variables are initialized randomly. Then the
+output is trained to match the objective we've set:
+
+```
+Step 20, output [[ 0.03575622  0.29863232  0.03474367  0.24735749]]
+Step 40, output [[ 0.40646029  0.9856872   0.46851286  0.95358551]]
+Step 60, output [[ 1.74541104  2.800704    1.79055595  2.74783421]]
+Step 80, output [[ 2.14977384  3.44340849  3.96120024  5.16242075]]
+Step 100, output [[ 1.99943113  3.02364397  3.93500996  4.9610076 ]]
+```
+
+In subsequent iterations, variables are initialized with the values read from
+the latest checkpoint. Running the same code again, we continue from where we
+left off:
+
+```
+Step 120, output [[ 1.99234128  3.0271616   3.98732996  4.96401167]]
+Step 140, output [[ 2.00133467  3.01270437  4.00616646  5.00406504]]
+Step 160, output [[ 1.99647415  2.9956708   3.99064088  4.99632359]]
+Step 180, output [[ 2.00699997  3.00904822  4.00706148  5.01193142]]
+Step 200, output [[ 1.98334622  2.98249531  3.97375059  4.97123432]]
+```
+
 
 ### Summaries, metrics and TensorBoard
 
@@ -782,9 +884,9 @@ issues](https://github.com/tensorflow/tensorflow/labels/eager)).
 
 You may want to browse through some sample code, including benchmarks for some:
 
--   [MNIST
-    classifier](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples/mnist)
--   [ResNet50 image
-    classification](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples/resnet50)
+-   [Linear Regression](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples/linear_regression)
+-   [MNIST handwritten digit classifier](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples/mnist)
+-   [ResNet50 image classification](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples/resnet50)
+-   [RNN to generate colors](https://www.tensorflow.org/code/tensorflow/contrib/eager/python/examples/rnn_colorbot)
 
-TODO(ashankar): Add PTB, LinearRegression, Colorbot.
+TODO(ashankar): Add PTB

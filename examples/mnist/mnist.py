@@ -119,7 +119,6 @@ def compute_accuracy(predictions, labels):
 
 
 def train_one_epoch(model, optimizer, dataset, log_interval=None):
-  tf.train.get_or_create_global_step()
   for (batch, (images, labels)) in enumerate(tfe.Iterator(dataset)):
     with tf.contrib.summary.record_summaries_every_n_global_steps(10):
       # TODO(ashankar): Remove this: b/67734394
@@ -193,15 +192,27 @@ def main(_):
       train_dir, flush_secs=10)
   test_summary_writer = tf.contrib.summary.create_summary_file_writer(
       test_dir, flush_secs=10, name='test')
+  checkpoint_prefix = os.path.join(FLAGS.checkpoint_dir, 'ckpt')
+
   with tf.device(device):
     for epoch in range(1, 11):
-      start = time.time()
-      with summary_writer.as_default():
-        train_one_epoch(model, optimizer, train_ds, FLAGS.log_interval)
-      end = time.time()
-      print('\nTrain time for epoch #%d: %f' % (epoch, end - start))
+      with tfe.restore_variables_on_create(
+          tf.train.latest_checkpoint(FLAGS.checkpoint_dir)):
+        global_step = tf.train.get_or_create_global_step()
+        start = time.time()
+        with summary_writer.as_default():
+          train_one_epoch(model, optimizer, train_ds, FLAGS.log_interval)
+        end = time.time()
+        print('\nTrain time for epoch #%d (global step %d): %f' % (
+            epoch, global_step.numpy(), end - start))
       with test_summary_writer.as_default():
         test(model, test_ds)
+      all_variables = (
+          model.variables
+          + tfe.get_optimizer_variables(optimizer)
+          + [global_step])
+      tfe.Saver(all_variables).save(
+          checkpoint_prefix, global_step=global_step)
 
 
 if __name__ == '__main__':
@@ -229,6 +240,12 @@ if __name__ == '__main__':
       default=None,
       metavar='N',
       help='Directory to write TensorBoard summaries')
+  parser.add_argument(
+      '--checkpoint_dir',
+      type=str,
+      default='/tmp/tensorflow/mnist/checkpoints/',
+      metavar='N',
+      help='Directory to save checkpoints in (once per epoch)')
   parser.add_argument(
       '--lr',
       type=float,
