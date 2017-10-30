@@ -33,11 +33,12 @@ def benchmark():
   iters = args.iters
   for i in range(iters):
     b+=a
-  sess.run(b.op)
+  result_op = b[0]
+  sess.run(result_op)
   
   sess.run(a.initializer, feed_dict={infeed: np.ones((n,),dtype=dtype)})
   time0 = time.perf_counter()
-  result = sess.run(b[0])
+  result = sess.run(result_op)
   elapsed_ms = (time.perf_counter()-time0)*1000
   print('result after %d iters: %d' % (iters, result,))
 
