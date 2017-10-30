@@ -67,7 +67,7 @@ from tensorflow.contrib.eager.python import tfe
 from tensorflow.python.eager import context
 
 try:
-  import matplotlib.pyplot as plt
+  import matplotlib.pyplot as plt  # pylint: disable=g-import-not-at-top
   HAS_MATPLOTLIB = True
 except ImportError:
   HAS_MATPLOTLIB = False
